@@ -321,7 +321,10 @@ const els = {
 let pollTimer: number | null = null;
 let reobserveClipsSentinel: (() => void) | null = null;
 let reobserveVideosSentinel: (() => void) | null = null;
-let activeModalMedia: { kind: 'clip' | 'video'; item: ClipItem | VideoItem } | null = null;
+let activeModalMedia: {
+  kind: 'clip' | 'video';
+  item: ClipItem | VideoItem;
+} | null = null;
 let modalDownloadButton: HTMLButtonElement | null = null;
 
 /**
@@ -558,7 +561,10 @@ function appendModalCreatorRow(list: HTMLDListElement, clip: ClipItem) {
  * @param item Clip or VOD metadata.
  * @example fillMediaModalInfo('clip', clip);
  */
-function fillMediaModalInfo(kind: 'clip' | 'video', item: ClipItem | VideoItem) {
+function fillMediaModalInfo(
+  kind: 'clip' | 'video',
+  item: ClipItem | VideoItem
+) {
   if (!els.mediaModalInfo) return;
   els.mediaModalInfo.replaceChildren();
 
