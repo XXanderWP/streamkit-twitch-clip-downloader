@@ -14,14 +14,16 @@
           <h1 class="downloader__title" data-i18n="title">Twitch Clip &amp; VOD Downloader</h1>
           <p class="downloader__subtitle" id="channel-label" data-i18n="loading">Loading…</p>
         </div>
-        <div class="downloader__folder" id="folder-label"></div>
+        <div class="downloader__folder-row">
+          <div class="downloader__folder" id="folder-label"></div>
+          <button type="button" class="btn" id="open-folder-btn" hidden data-i18n="open_folder">Open folder</button>
+        </div>
       </header>
 
       <section class="downloader__toolbar panel">
         <div class="toolbar-row">
           <label class="toolbar-row__label" for="channel-input" data-i18n="channel">Channel login</label>
           <input type="text" id="channel-input" class="toolbar-row__input" placeholder="your_channel" autocomplete="off" />
-          <button type="button" class="btn btn-primary toolbar-row__btn" id="reload-btn" data-i18n="reload">Reload</button>
         </div>
       </section>
 
@@ -34,27 +36,59 @@
       <main class="downloader__content panel">
         <div class="tab-panels">
           <section class="tab-panel active" id="panel-clips" role="tabpanel">
+            <details class="clip-filters" open>
+              <summary class="clip-filters__summary" data-i18n="filters">Filters</summary>
+              <div class="clip-filters__grid">
+                <label class="clip-filters__field clip-filters__field--wide">
+                  <span data-i18n="filter_title">Title contains</span>
+                  <input type="text" id="filter-title" autocomplete="off" />
+                </label>
+                <label class="clip-filters__field">
+                  <span data-i18n="filter_date_from">Date from</span>
+                  <input type="date" id="filter-date-from" />
+                </label>
+                <label class="clip-filters__field">
+                  <span data-i18n="filter_date_to">Date to</span>
+                  <input type="date" id="filter-date-to" />
+                </label>
+                <label class="clip-filters__field">
+                  <span data-i18n="filter_min_views">Min views</span>
+                  <input type="number" id="filter-min-views" min="0" step="1" />
+                </label>
+                <label class="clip-filters__field">
+                  <span data-i18n="filter_max_views">Max views</span>
+                  <input type="number" id="filter-max-views" min="0" step="1" />
+                </label>
+                <label class="clip-filters__field">
+                  <span data-i18n="filter_include_creators">Include creators</span>
+                  <input type="text" id="filter-include-creators" placeholder="user1, user2" autocomplete="off" />
+                </label>
+                <label class="clip-filters__field">
+                  <span data-i18n="filter_exclude_creators">Exclude creators</span>
+                  <input type="text" id="filter-exclude-creators" placeholder="user1, user2" autocomplete="off" />
+                </label>
+              </div>
+              <p class="clip-filters__hint" data-i18n="filter_hint">
+                Twitch API filters by date range. Title, views, and creators are filtered locally after loading.
+              </p>
+            </details>
             <div class="tab-panel__toolbar">
+              <button type="button" class="btn tab-reload-btn" data-i18n="reload">Reload</button>
               <button type="button" class="btn btn-primary" id="clips-download-all" hidden data-i18n="download_all">
                 Download all
               </button>
             </div>
             <div class="list" id="clips-list"></div>
-            <div class="pagination">
-              <button type="button" class="btn" id="clips-more" hidden data-i18n="load_more">Load more</button>
-            </div>
           </section>
 
           <section class="tab-panel" id="panel-videos" role="tabpanel" hidden>
             <div class="tab-panel__toolbar">
+              <button type="button" class="btn tab-reload-btn" data-i18n="reload">Reload</button>
               <button type="button" class="btn btn-primary" id="videos-download-all" hidden data-i18n="download_all">
                 Download all
               </button>
             </div>
             <div class="list" id="videos-list"></div>
-            <div class="pagination">
-              <button type="button" class="btn" id="videos-more" hidden data-i18n="load_more">Load more</button>
-            </div>
           </section>
 
           <section class="tab-panel" id="panel-url" role="tabpanel" hidden>

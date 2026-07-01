@@ -13,6 +13,9 @@ type TwitchClip = {
   thumbnail_url: string;
   duration: number;
   broadcaster_name: string;
+  creator_id: string;
+  creator_name: string;
+  downloaded?: boolean;
 };
 
 /** Twitch Helix video / VOD record (subset used by the UI). */
@@ -26,6 +29,7 @@ type TwitchVideo = {
   duration: string;
   user_name: string;
   viewable: string;
+  downloaded?: boolean;
 };
 
 /** Persisted addon settings from `api.config.getParams()`. */
@@ -46,6 +50,7 @@ type WorkerDownloadJob = {
   id: string;
   url: string;
   title: string;
+  mediaId?: string;
   status: 'pending' | 'downloading' | 'done' | 'error';
   progress: {
     stage: string;
@@ -56,6 +61,20 @@ type WorkerDownloadJob = {
   error?: string;
 };
 
+/** Local index of completed downloads stored in the output folder. */
+type DownloadIndex = Record<string, { url: string; title: string; downloadedAt: number }>;
+
+/** Client-side clip filters (Twitch API + local matching). */
+type ClipFilters = {
+  title?: string;
+  startedAt?: string;
+  endedAt?: string;
+  minViews?: number;
+  maxViews?: number;
+  includeCreators: string[];
+  excludeCreators: string[];
+};
+
 /** Parsed Twitch Helix list response with cursor pagination. */
 type HelixListResponse<T> = {
   data?: T[];
@@ -64,6 +83,11 @@ type HelixListResponse<T> = {
 
 /** Active download jobs keyed by yt-dlp download id. */
 const downloadJobs = new Map<string, WorkerDownloadJob>();
+
+const DOWNLOAD_INDEX_FILE = '.twitch-downloader-index.json';
+const CLIPS_PAGE_SIZE = 20;
+const CLIPS_FETCH_SIZE = 100;
+const CLIPS_MAX_SCAN_PAGES = 10;
 
 /**
  * Reads persisted addon settings from the main process.
@@ -193,6 +217,279 @@ async function ensureDownloadFolderAccess(folder: string) {
 }
 
 /**
+ * Builds the path separator for a download folder.
+ * @param folder Absolute download folder path.
+ * @returns Path separator used by the folder.
+ * @example
+ * getFolderSeparator('C:\\\\Videos');
+ */
+function getFolderSeparator(folder: string) {
+  return folder.includes('\\') ? '\\' : '/';
+}
+
+/**
+ * Returns the absolute path to the download index file.
+ * @param folder Absolute download folder path.
+ * @returns Path to `.twitch-downloader-index.json`.
+ * @example
+ * getDownloadIndexPath('C:\\\\Videos');
+ */
+function getDownloadIndexPath(folder: string) {
+  return `${folder}${getFolderSeparator(folder)}${DOWNLOAD_INDEX_FILE}`;
+}
+
+/**
+ * Loads the persisted download index from the output folder.
+ * @param folder Absolute download folder path.
+ * @returns Map of media id to download metadata.
+ * @example
+ * const index = await loadDownloadIndex('C:\\\\Videos');
+ */
+async function loadDownloadIndex(folder: string): Promise<DownloadIndex> {
+  const indexPath = getDownloadIndexPath(folder);
+  const result = (await files.readFile(indexPath)) as { success?: boolean; data?: string };
+  if (!result?.success || !result.data) {
+    return {};
+  }
+  try {
+    return JSON.parse(result.data) as DownloadIndex;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Persists one completed download in the local index file.
+ * @param folder Absolute download folder path.
+ * @param mediaId Twitch clip or VOD id.
+ * @param url Source media URL.
+ * @param title Human-readable media title.
+ * @example
+ * await markMediaDownloaded('C:\\\\Videos', 'abc', 'https://clips.twitch.tv/abc', 'Clip');
+ */
+async function markMediaDownloaded(folder: string, mediaId: string, url: string, title: string) {
+  if (!mediaId) return;
+  const index = await loadDownloadIndex(folder);
+  index[mediaId] = { url, title, downloadedAt: Date.now() };
+  await files.writeFile(getDownloadIndexPath(folder), JSON.stringify(index, null, 2));
+}
+
+/**
+ * Lists file names in the download folder for fallback existence checks.
+ * @param folder Absolute download folder path.
+ * @returns Lowercase file names in the folder.
+ * @example
+ * const names = await listDownloadFolderNames('C:\\\\Videos');
+ */
+async function listDownloadFolderNames(folder: string) {
+  const result = (await files.readdir(folder)) as {
+    success?: boolean;
+    entries?: Array<{ name: string; isFile?: boolean }>;
+  };
+  if (!result?.success || !Array.isArray(result.entries)) {
+    return [] as string[];
+  }
+  return result.entries.filter(entry => entry.isFile).map(entry => entry.name.toLowerCase());
+}
+
+/**
+ * Checks whether a clip or VOD was already downloaded into the folder.
+ * @param folder Absolute download folder path.
+ * @param mediaId Twitch media id.
+ * @param url Source media URL.
+ * @param index Cached download index.
+ * @param fileNames Cached folder file names.
+ * @returns True when the media is already present.
+ * @example
+ * isMediaDownloaded(folder, 'abc', url, index, names);
+ */
+function isMediaDownloaded(
+  folder: string,
+  mediaId: string,
+  url: string,
+  index: DownloadIndex,
+  fileNames: string[]
+) {
+  if (!folder || !mediaId) return false;
+  if (index[mediaId]) return true;
+  const slug = url.split('/').pop()?.toLowerCase() ?? '';
+  const idLower = mediaId.toLowerCase();
+  return fileNames.some(name => name.includes(idLower) || (slug && name.includes(slug)));
+}
+
+/**
+ * Adds `downloaded` flag to list items based on the local index and folder scan.
+ * @param folder Absolute download folder path.
+ * @param items Clips or VOD entries.
+ * @returns Items annotated with `downloaded`.
+ * @example
+ * const clips = await annotateDownloaded(folder, rawClips);
+ */
+async function annotateDownloaded<T extends { id: string; url: string }>(folder: string, items: T[]) {
+  if (!folder) {
+    return items.map(item => ({ ...item, downloaded: false }));
+  }
+  const index = await loadDownloadIndex(folder);
+  const fileNames = await listDownloadFolderNames(folder);
+  return items.map(item => ({
+    ...item,
+    downloaded: isMediaDownloaded(folder, item.id, item.url, index, fileNames),
+  }));
+}
+
+/**
+ * Converts a local folder path into a `file://` URL for `api.openUrl`.
+ * @param folderPath Absolute folder path.
+ * @returns File URL understood by the OS shell.
+ * @example
+ * toFileUrl('C:\\\\Videos');
+ */
+function toFileUrl(folderPath: string) {
+  const normalized = folderPath.replace(/\\/g, '/');
+  if (/^[A-Za-z]:\//.test(normalized)) {
+    return `file:///${normalized}`;
+  }
+  return `file://${normalized.startsWith('/') ? normalized : `/${normalized}`}`;
+}
+
+/**
+ * Replaces Twitch thumbnail template variables with a fixed size.
+ * @param thumbnailUrl Raw thumbnail URL from Helix.
+ * @returns Usable image URL.
+ * @example
+ * normalizeThumbnailUrl('https://...thumb0-%{width}x%{height}.jpg');
+ */
+function normalizeThumbnailUrl(thumbnailUrl: string) {
+  return thumbnailUrl
+    .replace(/%\{width\}/g, '480')
+    .replace(/%\{height\}/g, '272');
+}
+
+/**
+ * Parses a date input into RFC3339 UTC for Twitch `started_at` / `ended_at`.
+ * @param value Date string from the UI (`YYYY-MM-DD`).
+ * @param endOfDay When true, uses 23:59:59 instead of 00:00:00.
+ * @returns RFC3339 timestamp or undefined.
+ * @example
+ * toRfc3339Date('2024-03-01', true);
+ */
+function toRfc3339Date(value: string, endOfDay = false) {
+  const trimmed = value.trim();
+  if (!trimmed) return undefined;
+  const suffix = endOfDay ? 'T23:59:59Z' : 'T00:00:00Z';
+  return `${trimmed}${suffix}`;
+}
+
+/**
+ * Parses comma-separated creator logins from a query parameter.
+ * @param value Raw query string.
+ * @returns Normalized creator names.
+ * @example
+ * parseCreatorList('user1, User2');
+ */
+function parseCreatorList(value: unknown) {
+  if (typeof value !== 'string') return [] as string[];
+  return [...new Set(value.split(',').map(item => item.trim().toLowerCase()).filter(Boolean))];
+}
+
+/**
+ * Parses clip filter options from an HTTP query object.
+ * @param query Endpoint query parameters.
+ * @returns Normalized clip filters.
+ * @example
+ * const filters = parseClipFilters(query);
+ */
+function parseClipFilters(query: Record<string, unknown>): ClipFilters {
+  const minViewsRaw = typeof query.min_views === 'string' ? Number(query.min_views) : NaN;
+  const maxViewsRaw = typeof query.max_views === 'string' ? Number(query.max_views) : NaN;
+  return {
+    title: typeof query.title === 'string' ? query.title.trim() : '',
+    startedAt: toRfc3339Date(typeof query.started_at === 'string' ? query.started_at : ''),
+    endedAt: toRfc3339Date(typeof query.ended_at === 'string' ? query.ended_at : '', true),
+    minViews: Number.isFinite(minViewsRaw) ? minViewsRaw : undefined,
+    maxViews: Number.isFinite(maxViewsRaw) ? maxViewsRaw : undefined,
+    includeCreators: parseCreatorList(query.include_creators),
+    excludeCreators: parseCreatorList(query.exclude_creators),
+  };
+}
+
+/**
+ * Checks whether a clip matches local filter options.
+ * @param clip Twitch clip record.
+ * @param filters Active clip filters.
+ * @returns True when the clip should be shown.
+ * @example
+ * matchesClipFilters(clip, filters);
+ */
+function matchesClipFilters(clip: TwitchClip, filters: ClipFilters) {
+  if (filters.title && !clip.title.toLowerCase().includes(filters.title.toLowerCase())) {
+    return false;
+  }
+  if (filters.minViews !== undefined && clip.view_count < filters.minViews) {
+    return false;
+  }
+  if (filters.maxViews !== undefined && clip.view_count > filters.maxViews) {
+    return false;
+  }
+  const creator = clip.creator_name.toLowerCase();
+  if (filters.includeCreators.length > 0) {
+    const included = filters.includeCreators.some(
+      name => creator === name || creator.includes(name)
+    );
+    if (!included) return false;
+  }
+  if (filters.excludeCreators.some(name => creator === name || creator.includes(name))) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Fetches clips from Twitch with API date filters and local post-filtering.
+ * @param broadcasterId Twitch broadcaster id.
+ * @param filters Clip filters from the UI.
+ * @param cursor Pagination cursor.
+ * @returns Matching clips and the next cursor.
+ * @example
+ * const page = await fetchFilteredClips('123', filters, null);
+ */
+async function fetchFilteredClips(broadcasterId: string, filters: ClipFilters, cursor: string | null) {
+  const collected: TwitchClip[] = [];
+  let nextCursor = cursor;
+  let scannedPages = 0;
+
+  while (collected.length < CLIPS_PAGE_SIZE && scannedPages < CLIPS_MAX_SCAN_PAGES) {
+    const params = new URLSearchParams({
+      broadcaster_id: broadcasterId,
+      first: String(CLIPS_FETCH_SIZE),
+    });
+    if (nextCursor) params.set('after', nextCursor);
+    if (filters.startedAt) params.set('started_at', filters.startedAt);
+    if (filters.endedAt) params.set('ended_at', filters.endedAt);
+
+    const response = await twitchApiGet<HelixListResponse<TwitchClip>>(
+      `https://api.twitch.tv/helix/clips?${params.toString()}`
+    );
+    const batch = response.data ?? [];
+    nextCursor = response.pagination?.cursor ?? null;
+
+    for (const clip of batch) {
+      if (!matchesClipFilters(clip, filters)) continue;
+      collected.push(clip);
+      if (collected.length >= CLIPS_PAGE_SIZE) break;
+    }
+
+    if (!nextCursor || batch.length === 0) break;
+    scannedPages += 1;
+  }
+
+  return {
+    clips: collected.slice(0, CLIPS_PAGE_SIZE),
+    cursor: nextCursor,
+  };
+}
+
+/**
  * Runs yt-dlp download in the background and updates the in-memory job state.
  * @param downloadId Correlation id shared with the UI.
  * @param url Source media URL.
@@ -207,7 +504,8 @@ async function runMediaDownload(
   url: string,
   title: string,
   folder: string,
-  filenameTemplate: string
+  filenameTemplate: string,
+  mediaId?: string
 ) {
   const job = downloadJobs.get(downloadId);
   if (!job) return;
@@ -226,17 +524,21 @@ async function runMediaDownload(
 
   job.status = 'done';
   job.progress = { stage: 'done', percent: 100 };
+  if (mediaId) {
+    await markMediaDownloaded(folder, mediaId, url, title);
+  }
 }
 
 /**
  * Validates settings, registers a download job, and starts yt-dlp asynchronously.
  * @param url Public clip or VOD URL.
  * @param title Human-readable title for the UI.
+ * @param mediaId Twitch media id used for duplicate detection.
  * @returns Download id when started or an error payload.
  * @example
- * const result = await startMediaDownload('https://clips.twitch.tv/Example', 'My clip');
+ * const result = await startMediaDownload('https://clips.twitch.tv/Example', 'My clip', 'ClipId');
  */
-async function startMediaDownload(url: string, title: string) {
+async function startMediaDownload(url: string, title: string, mediaId?: string) {
   const params = await readAddonParams();
   const folder = String(params.download_folder ?? '').trim();
   if (!folder) {
@@ -253,13 +555,14 @@ async function startMediaDownload(url: string, title: string) {
     id: downloadId,
     url,
     title,
+    mediaId,
     status: 'pending',
     progress: { stage: 'queued', percent: 0 },
   };
   downloadJobs.set(downloadId, job);
 
   const filenameTemplate = String(params.filename_template ?? '%(title)s.%(ext)s');
-  void runMediaDownload(downloadId, url, title, folder, filenameTemplate);
+  void runMediaDownload(downloadId, url, title, folder, filenameTemplate, mediaId);
 
   return { downloadId, started: true };
 }
@@ -319,6 +622,7 @@ network.endpoints.create('state', 'GET', 'onGetState');
 network.endpoints.create('clips', 'GET', 'onGetClips');
 network.endpoints.create('videos', 'GET', 'onGetVideos');
 network.endpoints.create('download', 'POST', 'onDownload');
+network.endpoints.create('open-folder', 'POST', 'onOpenFolder');
 
 events.On('ytdlp:download-progress', ({ downloadId, progress }) => {
   const job = downloadJobs.get(downloadId);
@@ -370,22 +674,28 @@ events.On('onGetClips', async ({ query }) => {
   try {
     const login = typeof query.login === 'string' ? query.login.trim() : '';
     const cursor = typeof query.cursor === 'string' ? query.cursor.trim() : '';
+    const filters = parseClipFilters(query);
     const { broadcasterId, displayName } = await resolveBroadcaster(login || undefined);
-    const params = new URLSearchParams({
-      broadcaster_id: broadcasterId,
-      first: '20',
-    });
-    if (cursor) params.set('after', cursor);
-
-    const clips = await twitchApiGet<HelixListResponse<TwitchClip>>(
-      `https://api.twitch.tv/helix/clips?${params.toString()}`
-    );
+    const addonParams = await readAddonParams();
+    const folder = String(addonParams.download_folder ?? '').trim();
+    const page = await fetchFilteredClips(broadcasterId, filters, cursor || null);
+    const clips = await annotateDownloaded(folder, page.clips);
 
     return {
       ok: true,
       channel: displayName,
-      clips: clips.data ?? [],
-      cursor: clips.pagination?.cursor ?? null,
+      clips,
+      cursor: page.cursor,
+      filters: {
+        apiDateRange: Boolean(filters.startedAt || filters.endedAt),
+        localFilters: Boolean(
+          filters.title ||
+            filters.minViews !== undefined ||
+            filters.maxViews !== undefined ||
+            filters.includeCreators.length ||
+            filters.excludeCreators.length
+        ),
+      },
     };
   } catch (error) {
     return {
@@ -403,6 +713,8 @@ events.On('onGetVideos', async ({ query }) => {
     const login = typeof query.login === 'string' ? query.login.trim() : '';
     const cursor = typeof query.cursor === 'string' ? query.cursor.trim() : '';
     const { broadcasterId, displayName } = await resolveBroadcaster(login || undefined);
+    const addonParams = await readAddonParams();
+    const folder = String(addonParams.download_folder ?? '').trim();
     const params = new URLSearchParams({
       user_id: broadcasterId,
       first: '20',
@@ -414,12 +726,18 @@ events.On('onGetVideos', async ({ query }) => {
       `https://api.twitch.tv/helix/videos?${params.toString()}`
     );
 
-    const publicVideos = (videos.data ?? []).filter(item => item.viewable === 'public');
+    const publicVideos = (videos.data ?? [])
+      .filter(item => item.viewable === 'public')
+      .map(item => ({
+        ...item,
+        thumbnail_url: normalizeThumbnailUrl(item.thumbnail_url),
+      }));
+    const annotatedVideos = await annotateDownloaded(folder, publicVideos);
 
     return {
       ok: true,
       channel: displayName,
-      videos: publicVideos,
+      videos: annotatedVideos,
       cursor: videos.pagination?.cursor ?? null,
     };
   } catch (error) {
@@ -430,18 +748,38 @@ events.On('onGetVideos', async ({ query }) => {
   }
 });
 
+events.On('onOpenFolder', async ({ query }) => {
+  const denied = assertToken(query);
+  if (denied) return denied;
+
+  const addonParams = await readAddonParams();
+  const folder = String(addonParams.download_folder ?? '').trim();
+  if (!folder) {
+    return { error: 'no_folder', message: 'Set a download folder in addon settings' };
+  }
+
+  const access = await ensureDownloadFolderAccess(folder);
+  if (!access.success) {
+    return { error: 'no_file_access', message: access.message ?? 'Folder access denied' };
+  }
+
+  api.openUrl(toFileUrl(folder));
+  return { ok: true };
+});
+
 events.On('onDownload', async ({ query, body }) => {
   const denied = assertToken(query);
   if (denied) return denied;
 
   const url = typeof body?.url === 'string' ? body.url.trim() : '';
   const title = typeof body?.title === 'string' ? body.title.trim() : url;
+  const mediaId = typeof body?.mediaId === 'string' ? body.mediaId.trim() : '';
   if (!url) {
     return { error: 'missing_url', message: 'URL is required' };
   }
 
   try {
-    return await startMediaDownload(url, title || url);
+    return await startMediaDownload(url, title || url, mediaId || undefined);
   } catch (error) {
     return {
       error: 'download_failed',
