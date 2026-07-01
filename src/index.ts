@@ -67,6 +67,8 @@ type DownloadIndex = Record<string, { url: string; title: string; downloadedAt: 
 /** Client-side clip filters (Twitch API + local matching). */
 type ClipFilters = {
   title?: string;
+  dateFrom?: string;
+  dateTo?: string;
   startedAt?: string;
   endedAt?: string;
   minViews?: number;
@@ -74,6 +76,9 @@ type ClipFilters = {
   includeCreators: string[];
   excludeCreators: string[];
 };
+
+/** Earliest date Twitch clips can exist (service launch). */
+const TWITCH_EPOCH_START = '2011-06-01T00:00:00Z';
 
 /** Parsed Twitch Helix list response with cursor pagination. */
 type HelixListResponse<T> = {
@@ -402,15 +407,46 @@ function parseCreatorList(value: unknown) {
 function parseClipFilters(query: Record<string, unknown>): ClipFilters {
   const minViewsRaw = typeof query.min_views === 'string' ? Number(query.min_views) : NaN;
   const maxViewsRaw = typeof query.max_views === 'string' ? Number(query.max_views) : NaN;
+  const dateFrom = typeof query.started_at === 'string' ? query.started_at.trim() : '';
+  const dateTo = typeof query.ended_at === 'string' ? query.ended_at.trim() : '';
   return {
     title: typeof query.title === 'string' ? query.title.trim() : '',
-    startedAt: toRfc3339Date(typeof query.started_at === 'string' ? query.started_at : ''),
-    endedAt: toRfc3339Date(typeof query.ended_at === 'string' ? query.ended_at : '', true),
+    dateFrom: dateFrom || undefined,
+    dateTo: dateTo || undefined,
+    startedAt: toRfc3339Date(dateFrom),
+    endedAt: toRfc3339Date(dateTo, true),
     minViews: Number.isFinite(minViewsRaw) ? minViewsRaw : undefined,
     maxViews: Number.isFinite(maxViewsRaw) ? maxViewsRaw : undefined,
     includeCreators: parseCreatorList(query.include_creators),
     excludeCreators: parseCreatorList(query.exclude_creators),
   };
+}
+
+/**
+ * Twitch requires both `started_at` and `ended_at`; fills missing bounds when only one date is set.
+ * @param filters Parsed clip filters from the UI.
+ * @returns API-ready date range or empty when no date filter is active.
+ * @example
+ * resolveClipApiDateRange({ dateTo: '2022-01-01', endedAt: '2022-01-01T23:59:59Z', ... });
+ */
+function resolveClipApiDateRange(filters: ClipFilters) {
+  const hasFrom = Boolean(filters.dateFrom);
+  const hasTo = Boolean(filters.dateTo);
+  if (!hasFrom && !hasTo) {
+    return { startedAt: undefined, endedAt: undefined };
+  }
+
+  let startedAt = filters.startedAt;
+  let endedAt = filters.endedAt;
+
+  if (hasFrom && !hasTo) {
+    const today = new Date();
+    endedAt = `${today.toISOString().slice(0, 10)}T23:59:59Z`;
+  } else if (!hasFrom && hasTo) {
+    startedAt = TWITCH_EPOCH_START;
+  }
+
+  return { startedAt, endedAt };
 }
 
 /**
@@ -422,6 +458,13 @@ function parseClipFilters(query: Record<string, unknown>): ClipFilters {
  * matchesClipFilters(clip, filters);
  */
 function matchesClipFilters(clip: TwitchClip, filters: ClipFilters) {
+  const clipDate = clip.created_at.slice(0, 10);
+  if (filters.dateFrom && clipDate < filters.dateFrom) {
+    return false;
+  }
+  if (filters.dateTo && clipDate > filters.dateTo) {
+    return false;
+  }
   if (filters.title && !clip.title.toLowerCase().includes(filters.title.toLowerCase())) {
     return false;
   }
@@ -464,8 +507,9 @@ async function fetchFilteredClips(broadcasterId: string, filters: ClipFilters, c
       first: String(CLIPS_FETCH_SIZE),
     });
     if (nextCursor) params.set('after', nextCursor);
-    if (filters.startedAt) params.set('started_at', filters.startedAt);
-    if (filters.endedAt) params.set('ended_at', filters.endedAt);
+    const { startedAt, endedAt } = resolveClipApiDateRange(filters);
+    if (startedAt) params.set('started_at', startedAt);
+    if (endedAt) params.set('ended_at', endedAt);
 
     const response = await twitchApiGet<HelixListResponse<TwitchClip>>(
       `https://api.twitch.tv/helix/clips?${params.toString()}`
@@ -687,7 +731,7 @@ events.On('onGetClips', async ({ query }) => {
       clips,
       cursor: page.cursor,
       filters: {
-        apiDateRange: Boolean(filters.startedAt || filters.endedAt),
+        apiDateRange: Boolean(filters.dateFrom || filters.dateTo),
         localFilters: Boolean(
           filters.title ||
             filters.minViews !== undefined ||

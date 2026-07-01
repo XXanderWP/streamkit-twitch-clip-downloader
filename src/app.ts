@@ -178,7 +178,11 @@ type AppState = {
   downloadFolder: string;
   downloads: DownloadJob[];
   clipsLoading: boolean;
+  clipsReloading: boolean;
+  clipsLoadingMore: boolean;
   videosLoading: boolean;
+  videosReloading: boolean;
+  videosLoadingMore: boolean;
   error: string;
 };
 
@@ -207,31 +211,63 @@ const state: AppState = {
   downloadFolder: '',
   downloads: [],
   clipsLoading: false,
+  clipsReloading: false,
+  clipsLoadingMore: false,
   videosLoading: false,
+  videosReloading: false,
+  videosLoadingMore: false,
   error: '',
 };
 
 const els = {
   channelLabel: document.getElementById('channel-label'),
   folderLabel: document.getElementById('folder-label'),
-  openFolderBtn: document.getElementById('open-folder-btn') as HTMLButtonElement | null,
-  channelInput: document.getElementById('channel-input') as HTMLInputElement | null,
-  reloadBtns: [...document.querySelectorAll<HTMLButtonElement>('.tab-reload-btn')],
+  openFolderBtn: document.getElementById(
+    'open-folder-btn'
+  ) as HTMLButtonElement | null,
+  channelInput: document.getElementById(
+    'channel-input'
+  ) as HTMLInputElement | null,
+  reloadBtns: [
+    ...document.querySelectorAll<HTMLButtonElement>('.tab-reload-btn'),
+  ],
   clipsList: document.getElementById('clips-list'),
   videosList: document.getElementById('videos-list'),
-  clipsDownloadAll: document.getElementById('clips-download-all') as HTMLButtonElement | null,
-  videosDownloadAll: document.getElementById('videos-download-all') as HTMLButtonElement | null,
-  filterTitle: document.getElementById('filter-title') as HTMLInputElement | null,
-  filterDateFrom: document.getElementById('filter-date-from') as HTMLInputElement | null,
-  filterDateTo: document.getElementById('filter-date-to') as HTMLInputElement | null,
-  filterMinViews: document.getElementById('filter-min-views') as HTMLInputElement | null,
-  filterMaxViews: document.getElementById('filter-max-views') as HTMLInputElement | null,
-  filterIncludeCreators: document.getElementById('filter-include-creators') as HTMLInputElement | null,
-  filterExcludeCreators: document.getElementById('filter-exclude-creators') as HTMLInputElement | null,
+  clipsDownloadAll: document.getElementById(
+    'clips-download-all'
+  ) as HTMLButtonElement | null,
+  videosDownloadAll: document.getElementById(
+    'videos-download-all'
+  ) as HTMLButtonElement | null,
+  filterTitle: document.getElementById(
+    'filter-title'
+  ) as HTMLInputElement | null,
+  filterDateFrom: document.getElementById(
+    'filter-date-from'
+  ) as HTMLInputElement | null,
+  filterDateTo: document.getElementById(
+    'filter-date-to'
+  ) as HTMLInputElement | null,
+  filterMinViews: document.getElementById(
+    'filter-min-views'
+  ) as HTMLInputElement | null,
+  filterMaxViews: document.getElementById(
+    'filter-max-views'
+  ) as HTMLInputElement | null,
+  filterIncludeCreators: document.getElementById(
+    'filter-include-creators'
+  ) as HTMLInputElement | null,
+  filterExcludeCreators: document.getElementById(
+    'filter-exclude-creators'
+  ) as HTMLInputElement | null,
   urlInput: document.getElementById('url-input') as HTMLInputElement | null,
   urlDownloadBtn: document.getElementById('url-download-btn'),
-  errorMessage: document.getElementById('error-message') as HTMLParagraphElement | null,
-  emptyMessage: document.getElementById('empty-message') as HTMLParagraphElement | null,
+  errorMessage: document.getElementById(
+    'error-message'
+  ) as HTMLParagraphElement | null,
+  emptyMessage: document.getElementById(
+    'empty-message'
+  ) as HTMLParagraphElement | null,
   downloadsPanel: document.getElementById('downloads-panel'),
   downloadsList: document.getElementById('downloads-list'),
   tabs: [...document.querySelectorAll<HTMLButtonElement>('.tab')],
@@ -287,7 +323,11 @@ function apiUrl(path: string, query: Record<string, string> = {}) {
  * @returns Parsed JSON body.
  * @example const data = await apiFetch('state');
  */
-async function apiFetch<T>(path: string, options: RequestInit = {}, query: Record<string, string> = {}) {
+async function apiFetch<T>(
+  path: string,
+  options: RequestInit = {},
+  query: Record<string, string> = {}
+) {
   const response = await fetch(apiUrl(path, query), {
     ...options,
     headers: {
@@ -362,7 +402,9 @@ function findDownloadByUrl(url: string) {
  * @example hasActiveDownloads();
  */
 function hasActiveDownloads() {
-  return state.downloads.some(job => job.status === 'pending' || job.status === 'downloading');
+  return state.downloads.some(
+    job => job.status === 'pending' || job.status === 'downloading'
+  );
 }
 
 /**
@@ -403,7 +445,13 @@ function ensureListSentinel(list: HTMLElement | null) {
  * @example renderMediaItem(clip, 'details');
  */
 function renderMediaItem(
-  item: { id: string; title: string; url: string; thumbnail_url: string; downloaded?: boolean },
+  item: {
+    id: string;
+    title: string;
+    url: string;
+    thumbnail_url: string;
+    downloaded?: boolean;
+  },
   details: string
 ) {
   const activeJob = findDownloadByUrl(item.url);
@@ -431,7 +479,11 @@ function renderMediaItem(
   info.textContent = details;
   meta.append(title, info);
 
-  if (activeJob && activeJob.status !== 'done' && activeJob.status !== 'error') {
+  if (
+    activeJob &&
+    activeJob.status !== 'done' &&
+    activeJob.status !== 'error'
+  ) {
     node.classList.add('media-item--downloading');
     const progressWrap = document.createElement('div');
     progressWrap.className = 'media-item__progress';
@@ -473,34 +525,122 @@ function renderMediaItem(
 }
 
 /**
+ * Creates a StreamKit-style loading indicator for list states.
+ * @param mode `full` replaces the list; `inline` is shown at the bottom while paging.
+ * @returns Loader element.
+ * @example createListLoader('full');
+ */
+function createListLoader(mode: 'full' | 'inline') {
+  const node = document.createElement('div');
+  node.className = `list-loader list-loader--${mode}`;
+
+  const orbital = document.createElement('div');
+  orbital.className = 'list-loader__orbital';
+
+  const outer = document.createElement('div');
+  outer.className = 'list-loader__ring list-loader__ring--outer';
+
+  const inner = document.createElement('div');
+  inner.className = 'list-loader__ring list-loader__ring--inner';
+
+  const core = document.createElement('div');
+  core.className = 'list-loader__core';
+
+  orbital.append(outer, inner, core);
+
+  const text = document.createElement('p');
+  text.className = 'list-loader__text';
+  text.textContent = t('loading');
+
+  const dots = document.createElement('span');
+  dots.className = 'list-loader__dots';
+  dots.append(
+    document.createElement('span'),
+    document.createElement('span'),
+    document.createElement('span')
+  );
+  text.append(dots);
+
+  node.append(orbital, text);
+  return node;
+}
+
+/**
+ * Renders clips or VOD items inside a scrollable list container.
+ * @param listEl Target list element.
+ * @param options Render options for loading states and items.
+ * @example renderMediaList(els.clipsList, { reloading: false, items: state.clips, ... });
+ */
+function renderMediaList<T extends {
+  id: string;
+  title: string;
+  url: string;
+  thumbnail_url: string;
+  downloaded?: boolean;
+}>(
+  listEl: HTMLElement | null,
+  options: {
+    reloading: boolean;
+    loadingMore: boolean;
+    items: T[];
+    detailsFor: (item: T) => string;
+  }
+) {
+  if (!listEl) return;
+
+  listEl.replaceChildren();
+
+  if (options.reloading) {
+    listEl.append(createListLoader('full'));
+    return;
+  }
+
+  options.items.forEach(item => {
+    listEl.append(renderMediaItem(item, options.detailsFor(item)));
+  });
+
+  ensureListSentinel(listEl);
+
+  if (options.loadingMore) {
+    listEl.append(createListLoader('inline'));
+  }
+}
+
+/**
  * Renders clip and VOD lists for the active tab.
  * @example renderLists();
  */
 function renderLists() {
-  if (els.clipsList) {
-    els.clipsList.replaceChildren();
-    state.clips.forEach(clip => {
-      const details = `${formatDate(clip.created_at)} · ${clip.view_count} ${t('views')} · ${clip.duration.toFixed(0)}s · ${t('by')} ${clip.creator_name}`;
-      els.clipsList?.append(renderMediaItem(clip, details));
-    });
-    ensureListSentinel(els.clipsList);
-  }
+  renderMediaList(els.clipsList, {
+    reloading: state.clipsReloading,
+    loadingMore: state.clipsLoadingMore,
+    items: state.clips,
+    detailsFor: clip =>
+      `${formatDate(clip.created_at)} · ${clip.view_count} ${t('views')} · ${clip.duration.toFixed(0)}s · ${t('by')} ${clip.creator_name}`,
+  });
 
-  if (els.videosList) {
-    els.videosList.replaceChildren();
-    state.videos.forEach(video => {
-      const details = `${formatDate(video.created_at)} · ${video.view_count} ${t('views')} · ${video.duration}`;
-      els.videosList?.append(renderMediaItem(video, details));
-    });
-    ensureListSentinel(els.videosList);
-  }
+  renderMediaList(els.videosList, {
+    reloading: state.videosReloading,
+    loadingMore: state.videosLoadingMore,
+    items: state.videos,
+    detailsFor: video =>
+      `${formatDate(video.created_at)} · ${video.view_count} ${t('views')} · ${video.duration}`,
+  });
 
-  if (els.clipsDownloadAll) els.clipsDownloadAll.hidden = state.clips.length === 0;
-  if (els.videosDownloadAll) els.videosDownloadAll.hidden = state.videos.length === 0;
+  if (els.clipsDownloadAll)
+    els.clipsDownloadAll.hidden = state.clips.length === 0;
+  if (els.videosDownloadAll)
+    els.videosDownloadAll.hidden = state.videos.length === 0;
 
   const isEmpty =
-    (state.activeTab === 'clips' && !state.clipsLoading && state.clips.length === 0) ||
-    (state.activeTab === 'videos' && !state.videosLoading && state.videos.length === 0);
+    (state.activeTab === 'clips' &&
+      !state.clipsLoading &&
+      !state.clipsReloading &&
+      state.clips.length === 0) ||
+    (state.activeTab === 'videos' &&
+      !state.videosLoading &&
+      !state.videosReloading &&
+      state.videos.length === 0);
 
   if (els.emptyMessage) {
     els.emptyMessage.hidden = !isEmpty || Boolean(state.error);
@@ -622,7 +762,11 @@ async function refreshState() {
  */
 async function openDownloadFolder() {
   setError('');
-  const result = await apiFetch<{ error?: string; message?: string; ok?: boolean }>('open-folder', {
+  const result = await apiFetch<{
+    error?: string;
+    message?: string;
+    ok?: boolean;
+  }>('open-folder', {
     method: 'POST',
     body: '{}',
   });
@@ -641,7 +785,10 @@ async function loadClips(append = false) {
   if (append && !state.clipsCursor) return;
 
   state.clipsLoading = true;
+  state.clipsReloading = !append;
+  state.clipsLoadingMore = append;
   if (!append) setError('');
+  renderLists();
 
   const login = els.channelInput?.value.trim() ?? '';
   const query: Record<string, string> = {
@@ -659,13 +806,19 @@ async function loadClips(append = false) {
   }>('clips', {}, query);
 
   state.clipsLoading = false;
+  state.clipsReloading = false;
+  state.clipsLoadingMore = false;
+
   if (!result.ok) {
     setError(result.error ?? t('error_generic'));
+    renderLists();
     return;
   }
 
   state.channelName = result.channel ?? '';
-  state.clips = append ? [...state.clips, ...(result.clips ?? [])] : (result.clips ?? []);
+  state.clips = append
+    ? [...state.clips, ...(result.clips ?? [])]
+    : (result.clips ?? []);
   state.clipsCursor = result.cursor ?? null;
 
   if (els.channelLabel) {
@@ -684,7 +837,10 @@ async function loadVideos(append = false) {
   if (append && !state.videosCursor) return;
 
   state.videosLoading = true;
+  state.videosReloading = !append;
+  state.videosLoadingMore = append;
   if (!append) setError('');
+  renderLists();
 
   const login = els.channelInput?.value.trim() ?? '';
   const query: Record<string, string> = {};
@@ -700,13 +856,19 @@ async function loadVideos(append = false) {
   }>('videos', {}, query);
 
   state.videosLoading = false;
+  state.videosReloading = false;
+  state.videosLoadingMore = false;
+
   if (!result.ok) {
     setError(result.error ?? t('error_generic'));
+    renderLists();
     return;
   }
 
   state.channelName = result.channel ?? '';
-  state.videos = append ? [...state.videos, ...(result.videos ?? [])] : (result.videos ?? []);
+  state.videos = append
+    ? [...state.videos, ...(result.videos ?? [])]
+    : (result.videos ?? []);
   state.videosCursor = result.cursor ?? null;
 
   if (els.channelLabel) {
@@ -726,17 +888,22 @@ async function startDownload(url: string, title: string, mediaId?: string) {
   setError('');
 
   const existing = findDownloadByUrl(url);
-  if (existing && (existing.status === 'pending' || existing.status === 'downloading')) {
+  if (
+    existing &&
+    (existing.status === 'pending' || existing.status === 'downloading')
+  ) {
     return;
   }
 
-  const result = await apiFetch<{ error?: string; message?: string; downloadId?: string; started?: boolean }>(
-    'download',
-    {
-      method: 'POST',
-      body: JSON.stringify({ url, title, mediaId }),
-    }
-  );
+  const result = await apiFetch<{
+    error?: string;
+    message?: string;
+    downloadId?: string;
+    started?: boolean;
+  }>('download', {
+    method: 'POST',
+    body: JSON.stringify({ url, title, mediaId }),
+  });
 
   if (result.error) {
     setError(result.message ?? result.error);
@@ -766,7 +933,9 @@ async function startDownload(url: string, title: string, mediaId?: string) {
  * @param items Clip or VOD entries to download.
  * @example await downloadAll(state.clips);
  */
-async function downloadAll(items: Array<{ url: string; title: string; id: string }>) {
+async function downloadAll(
+  items: Array<{ url: string; title: string; id: string }>
+) {
   for (const item of items) {
     const existing = findDownloadByUrl(item.url);
     if (existing && existing.status !== 'error' && existing.status !== 'done') {
