@@ -218,15 +218,48 @@ const params = new URLSearchParams(window.location.search);
 const token = params.get('token') ?? '';
 const apiBase = `http://localhost:${window.location.port}/addon/${ADDON_ID}`;
 
-/** Detects UI locale from browser language. */
-function detectLocale(): Locale {
-  const lang = (navigator.language || 'en').slice(0, 2);
-  if (lang === 'ru' || lang === 'uk') return lang;
+/**
+ * Normalizes a StreamKit UI locale key to a supported addon locale.
+ * @param value Locale from the worker `LANG.current` bridge.
+ * @returns Supported locale (`en`, `ru`, or `uk`).
+ * @example normalizeAppLocale('ru');
+ */
+function normalizeAppLocale(value: string | undefined): Locale {
+  if (value === 'ru' || value === 'uk') return value;
   return 'en';
 }
 
+/**
+ * Applies the active UI locale and re-renders localized labels.
+ * @param locale Target locale.
+ * @example applyLocale('ru');
+ */
+function applyLocale(locale: Locale) {
+  const changed = state.locale !== locale;
+  state.locale = locale;
+  applyStaticI18n();
+
+  if (els.channelLabel) {
+    els.channelLabel.textContent = state.channelName
+      ? `${t('channel_prefix')} ${state.channelName}`
+      : t('loading');
+  }
+
+  if (els.mediaModalClose) {
+    els.mediaModalClose.setAttribute('aria-label', t('close'));
+  }
+
+  if (els.emptyMessage && !els.emptyMessage.hidden) {
+    els.emptyMessage.textContent = t('empty');
+  }
+
+  if (changed) {
+    renderLists();
+  }
+}
+
 const state: AppState = {
-  locale: detectLocale(),
+  locale: 'en',
   token,
   apiBase,
   activeTab: 'clips',
@@ -1017,6 +1050,7 @@ async function refreshState() {
     downloads?: DownloadJob[];
     twitchLogin?: string;
     twitchDisplayName?: string;
+    language?: string;
   }>('state');
 
   state.downloadFolder = result.downloadFolder ?? '';
@@ -1028,6 +1062,8 @@ async function refreshState() {
       els.channelInput.value = result.twitchLogin;
     }
   }
+
+  applyLocale(normalizeAppLocale(result.language));
 
   if (els.folderLabel) {
     els.folderLabel.textContent = state.downloadFolder
@@ -1416,7 +1452,6 @@ function bindEvents() {
  * @example void init();
  */
 async function init() {
-  applyStaticI18n();
   bindEvents();
   await refreshState();
   await loadClips();

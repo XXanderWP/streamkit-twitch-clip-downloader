@@ -746,6 +746,7 @@ events.On('onGetState', async ({ query }) => {
     downloads: [...downloadJobs.values()].slice(-20).reverse(),
     twitchLogin,
     twitchDisplayName,
+    language: LANG.current,
   };
 });
 
