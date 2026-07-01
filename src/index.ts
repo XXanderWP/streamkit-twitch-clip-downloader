@@ -116,6 +116,35 @@ async function twitchApiGet<T>(url: string, scopes: string[] = []) {
 }
 
 /**
+ * Returns the authorized Twitch channel metadata from the Twitch addon.
+ * @returns Channel id, display name, and login.
+ * @example
+ * const { login } = await getAuthTwitchChannel();
+ */
+async function getAuthTwitchChannel() {
+  const channel = await addons.request('twitch', 'getChannelId');
+  if (!channel.success) {
+    throw new Error(channel.message ?? 'Twitch is not connected');
+  }
+  const payload = channel.result as {
+    success?: boolean;
+    channelId?: string;
+    displayName?: string;
+    login?: string;
+    username?: string;
+    message?: string;
+  };
+  if (payload?.success === false || !payload.channelId) {
+    throw new Error(payload.message ?? 'Twitch channel is unavailable');
+  }
+  return {
+    broadcasterId: payload.channelId,
+    displayName: payload.displayName ?? payload.channelId,
+    login: payload.login ?? payload.username ?? '',
+  };
+}
+
+/**
  * Resolves a Twitch broadcaster id from login or the signed-in channel.
  * @param login Optional channel login; falls back to the authenticated user channel.
  * @returns Broadcaster id and display name.
@@ -135,23 +164,8 @@ async function resolveBroadcaster(login?: string) {
     return { broadcasterId: user.id, displayName: user.display_name };
   }
 
-  const channel = await addons.request('twitch', 'getChannelId');
-  if (!channel.success) {
-    throw new Error(channel.message ?? 'Twitch is not connected');
-  }
-  const payload = channel.result as {
-    success?: boolean;
-    channelId?: string;
-    displayName?: string;
-    message?: string;
-  };
-  if (payload?.success === false || !payload.channelId) {
-    throw new Error(payload.message ?? 'Twitch channel is unavailable');
-  }
-  return {
-    broadcasterId: payload.channelId,
-    displayName: payload.displayName ?? payload.channelId,
-  };
+  const auth = await getAuthTwitchChannel();
+  return { broadcasterId: auth.broadcasterId, displayName: auth.displayName };
 }
 
 /**
@@ -179,12 +193,48 @@ async function ensureDownloadFolderAccess(folder: string) {
 }
 
 /**
- * Starts a yt-dlp download into the configured folder.
- * @param url Public clip or VOD URL.
- * @param title Human-readable title for UI and notifications.
- * @returns Download id or an error payload.
+ * Runs yt-dlp download in the background and updates the in-memory job state.
+ * @param downloadId Correlation id shared with the UI.
+ * @param url Source media URL.
+ * @param title Human-readable title for the UI.
+ * @param folder Output directory from addon settings.
+ * @param filenameTemplate yt-dlp output template.
  * @example
- * const result = await startDownload('https://clips.twitch.tv/Example', 'My clip');
+ * void runMediaDownload(id, url, title, folder, '%(title)s.%(ext)s');
+ */
+async function runMediaDownload(
+  downloadId: string,
+  url: string,
+  title: string,
+  folder: string,
+  filenameTemplate: string
+) {
+  const job = downloadJobs.get(downloadId);
+  if (!job) return;
+
+  job.status = 'downloading';
+  job.progress = { stage: 'starting', percent: 0 };
+
+  const outputPath = buildOutputPath(folder, filenameTemplate);
+  const result = await ytdlp.downloadFile(url, outputPath, { downloadId, concurrentFragments: 4 });
+
+  if (!result.success) {
+    job.status = 'error';
+    job.error = result.message ?? result.error ?? 'Download failed';
+    return;
+  }
+
+  job.status = 'done';
+  job.progress = { stage: 'done', percent: 100 };
+}
+
+/**
+ * Validates settings, registers a download job, and starts yt-dlp asynchronously.
+ * @param url Public clip or VOD URL.
+ * @param title Human-readable title for the UI.
+ * @returns Download id when started or an error payload.
+ * @example
+ * const result = await startMediaDownload('https://clips.twitch.tv/Example', 'My clip');
  */
 async function startMediaDownload(url: string, title: string) {
   const params = await readAddonParams();
@@ -203,37 +253,15 @@ async function startMediaDownload(url: string, title: string) {
     id: downloadId,
     url,
     title,
-    status: 'downloading',
-    progress: { stage: 'starting', percent: 0 },
+    status: 'pending',
+    progress: { stage: 'queued', percent: 0 },
   };
   downloadJobs.set(downloadId, job);
 
-  const outputPath = buildOutputPath(folder, String(params.filename_template ?? '%(title)s.%(ext)s'));
-  const result = await ytdlp.downloadFile(url, outputPath, { downloadId, concurrentFragments: 4 });
+  const filenameTemplate = String(params.filename_template ?? '%(title)s.%(ext)s');
+  void runMediaDownload(downloadId, url, title, folder, filenameTemplate);
 
-  if (!result.success) {
-    job.status = 'error';
-    job.error = result.message ?? result.error ?? 'Download failed';
-    notify.Send({
-      id: `${data.id}_download_${downloadId}`,
-      type: 'error',
-      title: { en: 'Download failed', ru: 'Ошибка загрузки', uk: 'Помилка завантаження' },
-      message: { en: job.error, ru: job.error, uk: job.error },
-      temp: true,
-    });
-    return { error: result.error, message: job.error, downloadId };
-  }
-
-  job.status = 'done';
-  job.progress = { stage: 'done', percent: 100 };
-  notify.Send({
-    id: `${data.id}_download_${downloadId}`,
-    type: 'success',
-    title: { en: 'Download complete', ru: 'Загрузка завершена', uk: 'Завантаження завершено' },
-    message: { en: title, ru: title, uk: title },
-    temp: true,
-  });
-  return { downloadId, success: true };
+  return { downloadId, started: true };
 }
 
 void (async () => {
@@ -314,11 +342,24 @@ events.On('onGetState', async ({ query }) => {
     await ensureDownloadFolderAccess(folder);
   }
 
+  let twitchLogin = '';
+  let twitchDisplayName = '';
+  try {
+    const auth = await getAuthTwitchChannel();
+    twitchLogin = auth.login;
+    twitchDisplayName = auth.displayName;
+  } catch {
+    twitchLogin = '';
+    twitchDisplayName = '';
+  }
+
   return {
     ok: true,
     downloadFolder: folder,
     filenameTemplate: String(params.filename_template ?? '%(title)s.%(ext)s'),
     downloads: [...downloadJobs.values()].slice(-20).reverse(),
+    twitchLogin,
+    twitchDisplayName,
   };
 });
 

@@ -14,15 +14,16 @@ const I18N = {
     load_more: 'Load more',
     url_label: 'Twitch clip or VOD URL',
     download: 'Download',
+    download_all: 'Download all',
     downloads: 'Downloads',
     empty: 'No items found.',
     folder_missing: 'Set a download folder in addon settings.',
     channel_prefix: 'Channel:',
     folder_prefix: 'Save to:',
     views: 'views',
-    duration: 'Duration',
     error_generic: 'Something went wrong',
     downloading: 'Downloading…',
+    queued: 'Queued',
     done: 'Done',
     failed: 'Failed',
   },
@@ -37,15 +38,16 @@ const I18N = {
     load_more: 'Ещё',
     url_label: 'URL клипа или записи Twitch',
     download: 'Скачать',
+    download_all: 'Скачать всё',
     downloads: 'Загрузки',
     empty: 'Ничего не найдено.',
     folder_missing: 'Укажите папку загрузки в настройках аддона.',
     channel_prefix: 'Канал:',
     folder_prefix: 'Папка:',
     views: 'просмотров',
-    duration: 'Длительность',
     error_generic: 'Произошла ошибка',
     downloading: 'Загрузка…',
+    queued: 'В очереди',
     done: 'Готово',
     failed: 'Ошибка',
   },
@@ -60,15 +62,16 @@ const I18N = {
     load_more: 'Ще',
     url_label: 'URL кліпу або запису Twitch',
     download: 'Завантажити',
+    download_all: 'Завантажити все',
     downloads: 'Завантаження',
     empty: 'Нічого не знайдено.',
     folder_missing: 'Вкажіть папку завантаження в налаштуваннях аддона.',
     channel_prefix: 'Канал:',
     folder_prefix: 'Папка:',
     views: 'переглядів',
-    duration: 'Тривалість',
     error_generic: 'Сталася помилка',
     downloading: 'Завантаження…',
+    queued: 'У черзі',
     done: 'Готово',
     failed: 'Помилка',
   },
@@ -121,6 +124,7 @@ type AppState = {
   clipsCursor: string | null;
   videosCursor: string | null;
   channelName: string;
+  twitchLogin: string;
   downloadFolder: string;
   downloads: DownloadJob[];
   loading: boolean;
@@ -148,6 +152,7 @@ const state: AppState = {
   clipsCursor: null,
   videosCursor: null,
   channelName: '',
+  twitchLogin: '',
   downloadFolder: '',
   downloads: [],
   loading: false,
@@ -163,6 +168,8 @@ const els = {
   videosList: document.getElementById('videos-list'),
   clipsMore: document.getElementById('clips-more') as HTMLButtonElement | null,
   videosMore: document.getElementById('videos-more') as HTMLButtonElement | null,
+  clipsDownloadAll: document.getElementById('clips-download-all') as HTMLButtonElement | null,
+  videosDownloadAll: document.getElementById('videos-download-all') as HTMLButtonElement | null,
   urlInput: document.getElementById('url-input') as HTMLInputElement | null,
   urlDownloadBtn: document.getElementById('url-download-btn'),
   errorMessage: document.getElementById('error-message') as HTMLParagraphElement | null,
@@ -176,6 +183,8 @@ const els = {
     url: document.getElementById('panel-url'),
   },
 };
+
+let pollTimer: number | null = null;
 
 /**
  * Returns a localized UI string for the active locale.
@@ -244,6 +253,24 @@ function formatDate(value: string) {
 }
 
 /**
+ * Returns whether a URL already has an active download job.
+ * @param url Clip or VOD URL.
+ * @returns Matching download job if present.
+ * @example findDownloadByUrl('https://clips.twitch.tv/Example');
+ */
+function findDownloadByUrl(url: string) {
+  return state.downloads.find(job => job.url === url);
+}
+
+/**
+ * Returns true when at least one download is still running.
+ * @example hasActiveDownloads();
+ */
+function hasActiveDownloads() {
+  return state.downloads.some(job => job.status === 'pending' || job.status === 'downloading');
+}
+
+/**
  * Renders the global error banner.
  * @param message Error text or empty string to hide.
  * @example setError('Twitch is not connected');
@@ -256,15 +283,16 @@ function setError(message: string) {
 }
 
 /**
- * Renders one media card with a download action.
+ * Renders one media card with a download action and optional inline progress.
  * @param item Clip or VOD metadata.
  * @param details Secondary line (views, duration).
  * @returns DOM node for the list.
  * @example renderMediaItem({ title: 'Clip', url: '…', thumbnail_url: '…' }, '1:23');
  */
 function renderMediaItem(item: { title: string; url: string; thumbnail_url: string }, details: string) {
+  const activeJob = findDownloadByUrl(item.url);
   const node = document.createElement('article');
-  node.className = 'media-item';
+  node.className = `media-item${activeJob && activeJob.status !== 'done' && activeJob.status !== 'error' ? ' media-item--downloading' : ''}`;
 
   const img = document.createElement('img');
   img.className = 'media-item__thumb';
@@ -283,17 +311,42 @@ function renderMediaItem(item: { title: string; url: string; thumbnail_url: stri
   info.textContent = details;
   meta.append(title, info);
 
+  if (activeJob && activeJob.status !== 'done' && activeJob.status !== 'error') {
+    const progressWrap = document.createElement('div');
+    progressWrap.className = 'media-item__progress';
+    const progressBar = document.createElement('div');
+    progressBar.className = 'media-item__progress-bar';
+    progressBar.style.width = `${Math.max(0, Math.min(100, activeJob.progress?.percent ?? 0))}%`;
+    progressWrap.append(progressBar);
+    meta.append(progressWrap);
+  }
+
   const actions = document.createElement('div');
   actions.className = 'media-item__actions';
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'btn btn-primary';
-  button.textContent = t('download');
-  button.addEventListener('click', () => {
-    void startDownload(item.url, item.title);
-  });
-  actions.append(button);
 
+  if (activeJob?.status === 'done') {
+    button.textContent = t('done');
+    button.disabled = true;
+  } else if (activeJob?.status === 'error') {
+    button.textContent = t('failed');
+    button.addEventListener('click', () => {
+      void startDownload(item.url, item.title);
+    });
+  } else if (activeJob) {
+    const percent = activeJob.progress?.percent ?? 0;
+    button.textContent = `${t('downloading')} ${percent.toFixed(0)}%`;
+    button.disabled = true;
+  } else {
+    button.textContent = t('download');
+    button.addEventListener('click', () => {
+      void startDownload(item.url, item.title);
+    });
+  }
+
+  actions.append(button);
   node.append(img, meta, actions);
   return node;
 }
@@ -321,6 +374,8 @@ function renderLists() {
 
   if (els.clipsMore) els.clipsMore.hidden = !state.clipsCursor;
   if (els.videosMore) els.videosMore.hidden = !state.videosCursor;
+  if (els.clipsDownloadAll) els.clipsDownloadAll.hidden = state.clips.length === 0;
+  if (els.videosDownloadAll) els.videosDownloadAll.hidden = state.videos.length === 0;
 
   const isEmpty =
     (state.activeTab === 'clips' && !state.loading && state.clips.length === 0) ||
@@ -353,19 +408,44 @@ function renderDownloads() {
     barWrap.className = 'download-job__progress';
     const bar = document.createElement('div');
     bar.className = 'download-job__bar';
-    bar.style.width = `${Math.max(0, Math.min(100, job.progress?.percent ?? 0))}%`;
+    const percent = Math.max(0, Math.min(100, job.progress?.percent ?? 0));
+    bar.style.width = `${percent}%`;
     barWrap.append(bar);
     main.append(title, barWrap);
 
     const status = document.createElement('div');
     status.className = 'download-job__status';
-    if (job.status === 'done') status.textContent = t('done');
-    else if (job.status === 'error') status.textContent = job.error || t('failed');
-    else status.textContent = `${t('downloading')} ${(job.progress?.percent ?? 0).toFixed(0)}%`;
+    if (job.status === 'done') {
+      status.textContent = t('done');
+      status.classList.add('download-job__status--done');
+    } else if (job.status === 'error') {
+      status.textContent = job.error || t('failed');
+      status.classList.add('download-job__status--error');
+    } else if (job.status === 'pending') {
+      status.textContent = t('queued');
+    } else {
+      status.textContent = `${t('downloading')} ${percent.toFixed(0)}%`;
+    }
 
     row.append(main, status);
     els.downloadsList?.append(row);
   });
+
+  renderLists();
+}
+
+/**
+ * Schedules state polling with a shorter interval while downloads are active.
+ * @example schedulePolling();
+ */
+function schedulePolling() {
+  if (pollTimer !== null) {
+    window.clearInterval(pollTimer);
+  }
+  const interval = hasActiveDownloads() ? 500 : 2000;
+  pollTimer = window.setInterval(() => {
+    void refreshState();
+  }, interval);
 }
 
 /**
@@ -377,10 +457,19 @@ async function refreshState() {
     ok?: boolean;
     downloadFolder?: string;
     downloads?: DownloadJob[];
+    twitchLogin?: string;
+    twitchDisplayName?: string;
   }>('state');
 
   state.downloadFolder = result.downloadFolder ?? '';
   state.downloads = result.downloads ?? [];
+
+  if (result.twitchLogin && !state.twitchLogin) {
+    state.twitchLogin = result.twitchLogin;
+    if (els.channelInput && !els.channelInput.value.trim()) {
+      els.channelInput.value = result.twitchLogin;
+    }
+  }
 
   if (els.folderLabel) {
     els.folderLabel.textContent = state.downloadFolder
@@ -389,6 +478,7 @@ async function refreshState() {
   }
 
   renderDownloads();
+  schedulePolling();
 }
 
 /**
@@ -473,17 +563,56 @@ async function loadVideos(append = false) {
  */
 async function startDownload(url: string, title: string) {
   setError('');
-  const result = await apiFetch<{ error?: string; message?: string }>('download', {
-    method: 'POST',
-    body: JSON.stringify({ url, title }),
-  });
+
+  const existing = findDownloadByUrl(url);
+  if (existing && (existing.status === 'pending' || existing.status === 'downloading')) {
+    return;
+  }
+
+  const result = await apiFetch<{ error?: string; message?: string; downloadId?: string; started?: boolean }>(
+    'download',
+    {
+      method: 'POST',
+      body: JSON.stringify({ url, title }),
+    }
+  );
 
   if (result.error) {
     setError(result.message ?? result.error);
     return;
   }
 
-  await refreshState();
+  if (result.downloadId) {
+    state.downloads = [
+      {
+        id: result.downloadId,
+        url,
+        title,
+        status: 'pending',
+        progress: { stage: 'queued', percent: 0 },
+      },
+      ...state.downloads.filter(job => job.id !== result.downloadId),
+    ];
+    renderDownloads();
+    schedulePolling();
+  }
+
+  void refreshState();
+}
+
+/**
+ * Queues downloads for every item currently shown in the active list.
+ * @param items Clip or VOD entries to download.
+ * @example await downloadAll(state.clips);
+ */
+async function downloadAll(items: Array<{ url: string; title: string }>) {
+  for (const item of items) {
+    const existing = findDownloadByUrl(item.url);
+    if (existing && existing.status !== 'error' && existing.status !== 'done') {
+      continue;
+    }
+    await startDownload(item.url, item.title);
+  }
 }
 
 /**
@@ -528,15 +657,19 @@ function bindEvents() {
   els.clipsMore?.addEventListener('click', () => void loadClips(true));
   els.videosMore?.addEventListener('click', () => void loadVideos(true));
 
+  els.clipsDownloadAll?.addEventListener('click', () => {
+    void downloadAll(state.clips);
+  });
+
+  els.videosDownloadAll?.addEventListener('click', () => {
+    void downloadAll(state.videos);
+  });
+
   els.urlDownloadBtn?.addEventListener('click', () => {
     const url = els.urlInput?.value.trim() ?? '';
     if (!url) return;
     void startDownload(url, url);
   });
-
-  window.setInterval(() => {
-    void refreshState();
-  }, 2000);
 }
 
 /**

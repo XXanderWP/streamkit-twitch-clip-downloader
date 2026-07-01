@@ -18,8 +18,7 @@
     "WEB_CONTENT",
     "WEB_END_POINTS",
     "NETWORK_REQUEST",
-    "FILE_ACCESS",
-    "NOTIFY"
+    "FILE_ACCESS"
   ],
   "app_version": "1.0.19",
   "depends_on": [

@@ -18,11 +18,11 @@
       </header>
 
       <section class="downloader__toolbar panel">
-        <label class="field">
-          <span class="field__label" data-i18n="channel">Channel login</span>
-          <input type="text" id="channel-input" placeholder="your_channel" autocomplete="off" />
-        </label>
-        <button type="button" class="btn btn-primary" id="reload-btn" data-i18n="reload">Reload</button>
+        <div class="toolbar-row">
+          <label class="toolbar-row__label" for="channel-input" data-i18n="channel">Channel login</label>
+          <input type="text" id="channel-input" class="toolbar-row__input" placeholder="your_channel" autocomplete="off" />
+          <button type="button" class="btn btn-primary toolbar-row__btn" id="reload-btn" data-i18n="reload">Reload</button>
+        </div>
       </section>
 
       <nav class="downloader__tabs" role="tablist">
@@ -32,40 +32,55 @@
       </nav>
 
       <main class="downloader__content panel">
-        <section class="tab-panel active" id="panel-clips" role="tabpanel">
-          <div class="list" id="clips-list"></div>
-          <div class="pagination">
-            <button type="button" class="btn" id="clips-more" hidden data-i18n="load_more">Load more</button>
-          </div>
-        </section>
+        <div class="tab-panels">
+          <section class="tab-panel active" id="panel-clips" role="tabpanel">
+            <div class="tab-panel__toolbar">
+              <button type="button" class="btn btn-primary" id="clips-download-all" hidden data-i18n="download_all">
+                Download all
+              </button>
+            </div>
+            <div class="list" id="clips-list"></div>
+            <div class="pagination">
+              <button type="button" class="btn" id="clips-more" hidden data-i18n="load_more">Load more</button>
+            </div>
+          </section>
 
-        <section class="tab-panel" id="panel-videos" role="tabpanel" hidden>
-          <div class="list" id="videos-list"></div>
-          <div class="pagination">
-            <button type="button" class="btn" id="videos-more" hidden data-i18n="load_more">Load more</button>
-          </div>
-        </section>
+          <section class="tab-panel" id="panel-videos" role="tabpanel" hidden>
+            <div class="tab-panel__toolbar">
+              <button type="button" class="btn btn-primary" id="videos-download-all" hidden data-i18n="download_all">
+                Download all
+              </button>
+            </div>
+            <div class="list" id="videos-list"></div>
+            <div class="pagination">
+              <button type="button" class="btn" id="videos-more" hidden data-i18n="load_more">Load more</button>
+            </div>
+          </section>
 
-        <section class="tab-panel" id="panel-url" role="tabpanel" hidden>
-          <label class="field">
-            <span class="field__label" data-i18n="url_label">Twitch clip or VOD URL</span>
-            <input
-              type="text"
-              id="url-input"
-              placeholder="https://www.twitch.tv/videos/… or https://clips.twitch.tv/…"
-              autocomplete="off"
-            />
-          </label>
-          <button type="button" class="btn btn-primary" id="url-download-btn" data-i18n="download">Download</button>
-        </section>
+          <section class="tab-panel" id="panel-url" role="tabpanel" hidden>
+            <div class="toolbar-row toolbar-row--url">
+              <label class="toolbar-row__label" for="url-input" data-i18n="url_label">Twitch clip or VOD URL</label>
+              <input
+                type="text"
+                id="url-input"
+                class="toolbar-row__input"
+                placeholder="https://www.twitch.tv/videos/… or https://clips.twitch.tv/…"
+                autocomplete="off"
+              />
+              <button type="button" class="btn btn-primary toolbar-row__btn" id="url-download-btn" data-i18n="download">
+                Download
+              </button>
+            </div>
+          </section>
+        </div>
 
         <p class="message message--error" id="error-message" hidden></p>
         <p class="message message--info" id="empty-message" hidden data-i18n="empty">No items found.</p>
       </main>
 
       <section class="downloader__downloads panel" id="downloads-panel" hidden>
-        <h2 class="panel__title" data-i18n="downloads">Downloads</h2>
-        <div id="downloads-list"></div>
+        <h2 class="downloads__title" data-i18n="downloads">Downloads</h2>
+        <div class="downloads-list" id="downloads-list"></div>
       </section>
     </div>
     <script src="app.js"></script>
