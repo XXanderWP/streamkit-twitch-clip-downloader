@@ -1,16 +1,73 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="dark">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>My StreamKit Addon</title>
+    <title>Twitch Clip &amp; VOD Downloader</title>
+    <link rel="stylesheet" href="/data/styles.css" />
     <link rel="stylesheet" href="style.css" />
   </head>
-  <body>
-    <main>
-      <h1>My StreamKit Addon</h1>
-      <p id="status">Loading…</p>
-    </main>
+  <body class="App">
+    <div class="downloader">
+      <header class="downloader__header">
+        <div>
+          <h1 class="downloader__title" data-i18n="title">Twitch Clip &amp; VOD Downloader</h1>
+          <p class="downloader__subtitle" id="channel-label" data-i18n="loading">Loading…</p>
+        </div>
+        <div class="downloader__folder" id="folder-label"></div>
+      </header>
+
+      <section class="downloader__toolbar panel">
+        <label class="field">
+          <span class="field__label" data-i18n="channel">Channel login</span>
+          <input type="text" id="channel-input" placeholder="your_channel" autocomplete="off" />
+        </label>
+        <button type="button" class="btn btn-primary" id="reload-btn" data-i18n="reload">Reload</button>
+      </section>
+
+      <nav class="downloader__tabs" role="tablist">
+        <button type="button" class="tab active" data-tab="clips" role="tab" data-i18n="tab_clips">Clips</button>
+        <button type="button" class="tab" data-tab="videos" role="tab" data-i18n="tab_videos">VODs</button>
+        <button type="button" class="tab" data-tab="url" role="tab" data-i18n="tab_url">By URL</button>
+      </nav>
+
+      <main class="downloader__content panel">
+        <section class="tab-panel active" id="panel-clips" role="tabpanel">
+          <div class="list" id="clips-list"></div>
+          <div class="pagination">
+            <button type="button" class="btn" id="clips-more" hidden data-i18n="load_more">Load more</button>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="panel-videos" role="tabpanel" hidden>
+          <div class="list" id="videos-list"></div>
+          <div class="pagination">
+            <button type="button" class="btn" id="videos-more" hidden data-i18n="load_more">Load more</button>
+          </div>
+        </section>
+
+        <section class="tab-panel" id="panel-url" role="tabpanel" hidden>
+          <label class="field">
+            <span class="field__label" data-i18n="url_label">Twitch clip or VOD URL</span>
+            <input
+              type="text"
+              id="url-input"
+              placeholder="https://www.twitch.tv/videos/… or https://clips.twitch.tv/…"
+              autocomplete="off"
+            />
+          </label>
+          <button type="button" class="btn btn-primary" id="url-download-btn" data-i18n="download">Download</button>
+        </section>
+
+        <p class="message message--error" id="error-message" hidden></p>
+        <p class="message message--info" id="empty-message" hidden data-i18n="empty">No items found.</p>
+      </main>
+
+      <section class="downloader__downloads panel" id="downloads-panel" hidden>
+        <h2 class="panel__title" data-i18n="downloads">Downloads</h2>
+        <div id="downloads-list"></div>
+      </section>
+    </div>
     <script src="app.js"></script>
   </body>
 </html>

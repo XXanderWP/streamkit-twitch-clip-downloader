@@ -1,10 +1,14 @@
 {
   "id": "XXanderWP/streamkit-twitch-clip-downloader",
   "name": {
-    "en": "My StreamKit Addon"
+    "en": "Twitch Clip & VOD Downloader",
+    "ru": "Загрузчик клипов и записей Twitch",
+    "uk": "Завантажувач кліпів і записів Twitch"
   },
   "description": {
-    "en": "Integration addon for StreamKit+."
+    "en": "Download public Twitch clips and stream recordings",
+    "ru": "Скачивание публичных клипов и записей трансляций Twitch",
+    "uk": "Завантаження публічних кліпів і записів трансляцій Twitch"
   },
   "type": "application",
   "version": "1.0.0",
@@ -12,7 +16,10 @@
   "icon": "logo.png",
   "permissions": [
     "WEB_CONTENT",
-    "WEB_END_POINTS"
+    "WEB_END_POINTS",
+    "NETWORK_REQUEST",
+    "FILE_ACCESS",
+    "NOTIFY"
   ],
   "app_version": "1.0.19",
   "depends_on": [
