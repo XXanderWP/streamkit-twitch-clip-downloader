@@ -1,0 +1,27 @@
+{
+  "id": "XXanderWP/streamkit-twitch-clip-downloader",
+  "name": {
+    "en": "My StreamKit Addon"
+  },
+  "description": {
+    "en": "Integration addon for StreamKit+."
+  },
+  "type": "application",
+  "version": "1.0.0",
+  "author": "XanderWP",
+  "icon": "logo.png",
+  "permissions": [
+    "WEB_CONTENT",
+    "WEB_END_POINTS"
+  ],
+  "app_version": "1.0.19",
+  "depends_on": [
+    "twitch"
+  ],
+  "web": "index.html",
+  "web_type": "application",
+  "web_contents": [
+    "style.css",
+    "app.js"
+  ]
+}
