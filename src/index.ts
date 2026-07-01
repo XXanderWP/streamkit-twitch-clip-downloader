@@ -15,6 +15,7 @@ type TwitchClip = {
   broadcaster_name: string;
   creator_id: string;
   creator_name: string;
+  creator_profile_image_url?: string;
   downloaded?: boolean;
 };
 
@@ -339,6 +340,42 @@ async function annotateDownloaded<T extends { id: string; url: string }>(folder:
   return items.map(item => ({
     ...item,
     downloaded: isMediaDownloaded(folder, item.id, item.url, index, fileNames),
+  }));
+}
+
+/** Twitch Helix user record used to resolve clip creator avatars. */
+type TwitchHelixUser = {
+  id: string;
+  profile_image_url: string;
+};
+
+/**
+ * Adds creator profile image URLs to clip records.
+ * @param clips Clip page from Twitch Helix.
+ * @returns Clips annotated with `creator_profile_image_url`.
+ * @example
+ * const enriched = await enrichClipsWithCreatorProfiles(clips);
+ */
+async function enrichClipsWithCreatorProfiles(clips: TwitchClip[]) {
+  const creatorIds = [...new Set(clips.map(clip => clip.creator_id).filter(Boolean))];
+  if (creatorIds.length === 0) return clips;
+
+  const profileById = new Map<string, string>();
+  for (let offset = 0; offset < creatorIds.length; offset += 100) {
+    const batch = creatorIds.slice(offset, offset + 100);
+    const params = new URLSearchParams();
+    batch.forEach(id => params.append('id', id));
+    const response = await twitchApiGet<HelixListResponse<TwitchHelixUser>>(
+      `https://api.twitch.tv/helix/users?${params.toString()}`
+    );
+    for (const user of response.data ?? []) {
+      profileById.set(user.id, user.profile_image_url);
+    }
+  }
+
+  return clips.map(clip => ({
+    ...clip,
+    creator_profile_image_url: profileById.get(clip.creator_id) ?? '',
   }));
 }
 
@@ -667,6 +704,7 @@ network.endpoints.create('clips', 'GET', 'onGetClips');
 network.endpoints.create('videos', 'GET', 'onGetVideos');
 network.endpoints.create('download', 'POST', 'onDownload');
 network.endpoints.create('open-folder', 'POST', 'onOpenFolder');
+network.endpoints.create('open-url', 'POST', 'onOpenUrl');
 
 events.On('ytdlp:download-progress', ({ downloadId, progress }) => {
   const job = downloadJobs.get(downloadId);
@@ -723,7 +761,8 @@ events.On('onGetClips', async ({ query }) => {
     const addonParams = await readAddonParams();
     const folder = String(addonParams.download_folder ?? '').trim();
     const page = await fetchFilteredClips(broadcasterId, filters, cursor || null);
-    const clips = await annotateDownloaded(folder, page.clips);
+    const enrichedClips = await enrichClipsWithCreatorProfiles(page.clips);
+    const clips = await annotateDownloaded(folder, enrichedClips);
 
     return {
       ok: true,
@@ -790,6 +829,35 @@ events.On('onGetVideos', async ({ query }) => {
       error: error instanceof Error ? error.message : 'Failed to load videos',
     };
   }
+});
+
+/**
+ * Validates external URLs that may be opened in the system browser.
+ * @param value Candidate URL from the web UI.
+ * @returns True when the URL is a Twitch HTTPS link.
+ * @example
+ * isAllowedExternalUrl('https://www.twitch.tv/shroud');
+ */
+function isAllowedExternalUrl(value: string) {
+  try {
+    const parsed = new URL(value);
+    return parsed.protocol === 'https:' && parsed.hostname.endsWith('twitch.tv');
+  } catch {
+    return false;
+  }
+}
+
+events.On('onOpenUrl', async ({ query, body }) => {
+  const denied = assertToken(query);
+  if (denied) return denied;
+
+  const url = typeof body?.url === 'string' ? body.url.trim() : '';
+  if (!url || !isAllowedExternalUrl(url)) {
+    return { error: 'invalid_url', message: 'Only Twitch HTTPS URLs are allowed' };
+  }
+
+  api.openUrl(url);
+  return { ok: true };
 });
 
 events.On('onOpenFolder', async ({ query }) => {

@@ -27,6 +27,15 @@ const I18N = {
     filter_exclude_creators: 'Exclude creators',
     filter_hint:
       'Twitch API filters by date range. Title, views, and creators are filtered locally after loading.',
+    clear_filters: 'Clear filters',
+    modal_title: 'Title',
+    modal_date: 'Date',
+    modal_views: 'Views',
+    modal_duration: 'Duration',
+    modal_creator: 'Creator',
+    modal_channel: 'Channel',
+    modal_open_on_twitch: 'Open on Twitch',
+    close: 'Close',
     empty: 'No items found.',
     folder_missing: 'Set a download folder in addon settings.',
     channel_prefix: 'Channel:',
@@ -63,6 +72,15 @@ const I18N = {
     filter_exclude_creators: 'Исключить авторов',
     filter_hint:
       'Диапазон дат фильтруется через Twitch API. Название, просмотры и авторы фильтруются локально после загрузки.',
+    clear_filters: 'Очистить фильтры',
+    modal_title: 'Название',
+    modal_date: 'Дата',
+    modal_views: 'Просмотры',
+    modal_duration: 'Длительность',
+    modal_creator: 'Автор',
+    modal_channel: 'Канал',
+    modal_open_on_twitch: 'Открыть на Twitch',
+    close: 'Закрыть',
     empty: 'Ничего не найдено.',
     folder_missing: 'Укажите папку загрузки в настройках аддона.',
     channel_prefix: 'Канал:',
@@ -99,6 +117,15 @@ const I18N = {
     filter_exclude_creators: 'Виключити авторів',
     filter_hint:
       'Діапазон дат фільтрується через Twitch API. Назва, перегляди та автори фільтруються локально після завантаження.',
+    clear_filters: 'Очистити фільтри',
+    modal_title: 'Назва',
+    modal_date: 'Дата',
+    modal_views: 'Перегляди',
+    modal_duration: 'Тривалість',
+    modal_creator: 'Автор',
+    modal_channel: 'Канал',
+    modal_open_on_twitch: 'Відкрити на Twitch',
+    close: 'Закрити',
     empty: 'Нічого не знайдено.',
     folder_missing: 'Вкажіть папку завантаження в налаштуваннях аддона.',
     channel_prefix: 'Канал:',
@@ -137,6 +164,7 @@ type ClipItem = {
   duration: number;
   broadcaster_name: string;
   creator_name: string;
+  creator_profile_image_url?: string;
   downloaded?: boolean;
 };
 
@@ -260,6 +288,18 @@ const els = {
   filterExcludeCreators: document.getElementById(
     'filter-exclude-creators'
   ) as HTMLInputElement | null,
+  filterClearBtn: document.getElementById(
+    'filter-clear-btn'
+  ) as HTMLButtonElement | null,
+  mediaModal: document.getElementById('media-modal'),
+  mediaModalBackdrop: document.getElementById('media-modal-backdrop'),
+  mediaModalClose: document.getElementById(
+    'media-modal-close'
+  ) as HTMLButtonElement | null,
+  mediaModalIframe: document.getElementById(
+    'media-modal-iframe'
+  ) as HTMLIFrameElement | null,
+  mediaModalInfo: document.getElementById('media-modal-info'),
   urlInput: document.getElementById('url-input') as HTMLInputElement | null,
   urlDownloadBtn: document.getElementById('url-download-btn'),
   errorMessage: document.getElementById(
@@ -281,6 +321,8 @@ const els = {
 let pollTimer: number | null = null;
 let reobserveClipsSentinel: (() => void) | null = null;
 let reobserveVideosSentinel: (() => void) | null = null;
+let activeModalMedia: { kind: 'clip' | 'video'; item: ClipItem | VideoItem } | null = null;
+let modalDownloadButton: HTMLButtonElement | null = null;
 
 /**
  * Returns a localized UI string for the active locale.
@@ -374,6 +416,232 @@ function buildClipQuery(filters: ClipFilterState) {
 }
 
 /**
+ * Clears all clip filter inputs in the clips tab.
+ * @example clearClipFilters();
+ */
+function clearClipFilters() {
+  if (els.filterTitle) els.filterTitle.value = '';
+  if (els.filterDateFrom) els.filterDateFrom.value = '';
+  if (els.filterDateTo) els.filterDateTo.value = '';
+  if (els.filterMinViews) els.filterMinViews.value = '';
+  if (els.filterMaxViews) els.filterMaxViews.value = '';
+  if (els.filterIncludeCreators) els.filterIncludeCreators.value = '';
+  if (els.filterExcludeCreators) els.filterExcludeCreators.value = '';
+}
+
+/**
+ * Builds a Twitch profile URL for a login.
+ * @param login Twitch username.
+ * @returns HTTPS profile URL.
+ * @example twitchProfileUrl('Shroud');
+ */
+function twitchProfileUrl(login: string) {
+  return `https://www.twitch.tv/${login.trim().toLowerCase()}`;
+}
+
+/**
+ * Builds a Twitch embed URL for clips or VODs.
+ * @param kind Media type.
+ * @param mediaId Twitch clip or video id.
+ * @returns Embed iframe URL.
+ * @example buildTwitchEmbedUrl('clip', 'AwkwardHelplessSalamanderSwiftRage');
+ */
+function buildTwitchEmbedUrl(kind: 'clip' | 'video', mediaId: string) {
+  const parent = window.location.hostname || 'localhost';
+  if (kind === 'clip') {
+    return `https://clips.twitch.tv/embed?clip=${encodeURIComponent(mediaId)}&parent=${encodeURIComponent(parent)}`;
+  }
+  return `https://player.twitch.tv/?video=${encodeURIComponent(mediaId)}&parent=${encodeURIComponent(parent)}&autoplay=false`;
+}
+
+/**
+ * Opens a Twitch URL in the system browser through the worker.
+ * @param url HTTPS Twitch URL.
+ * @example await openExternalUrl('https://www.twitch.tv/shroud');
+ */
+async function openExternalUrl(url: string) {
+  setError('');
+  const result = await apiFetch<{
+    error?: string;
+    message?: string;
+    ok?: boolean;
+  }>('open-url', {
+    method: 'POST',
+    body: JSON.stringify({ url }),
+  });
+  if (result.error) {
+    setError(result.message ?? result.error);
+  }
+}
+
+/**
+ * Updates a download button label and handler for a clip or VOD item.
+ * @param button Target button element.
+ * @param item Media metadata used for the download request.
+ * @example configureDownloadButton(button, clip);
+ */
+function configureDownloadButton(
+  button: HTMLButtonElement,
+  item: { url: string; title: string; id: string; downloaded?: boolean }
+) {
+  const activeJob = findDownloadByUrl(item.url);
+  button.replaceChildren();
+  button.onclick = null;
+
+  if (activeJob?.status === 'done') {
+    button.textContent = t('done');
+    button.disabled = true;
+    return;
+  }
+
+  if (activeJob?.status === 'error') {
+    button.textContent = item.downloaded ? t('download_again') : t('download');
+    button.disabled = false;
+    button.onclick = () => {
+      void startDownload(item.url, item.title, item.id);
+    };
+    return;
+  }
+
+  if (activeJob) {
+    const percent = activeJob.progress?.percent ?? 0;
+    button.textContent = `${t('downloading')} ${percent.toFixed(0)}%`;
+    button.disabled = true;
+    return;
+  }
+
+  button.textContent = item.downloaded ? t('download_again') : t('download');
+  button.disabled = false;
+  button.onclick = () => {
+    void startDownload(item.url, item.title, item.id);
+  };
+}
+
+/**
+ * Appends a clickable creator row with avatar to the modal facts list.
+ * @param list Definition list element.
+ * @param clip Clip metadata.
+ * @example appendModalCreatorRow(list, clip);
+ */
+function appendModalCreatorRow(list: HTMLDListElement, clip: ClipItem) {
+  const dt = document.createElement('dt');
+  dt.textContent = t('modal_creator');
+  const dd = document.createElement('dd');
+  dd.className = 'media-modal__creator';
+
+  const row = document.createElement('div');
+  row.className = 'media-modal__creator-row';
+
+  if (clip.creator_profile_image_url) {
+    const avatar = document.createElement('img');
+    avatar.className = 'media-modal__creator-avatar';
+    avatar.src = clip.creator_profile_image_url;
+    avatar.alt = '';
+    avatar.loading = 'lazy';
+    row.append(avatar);
+  }
+
+  const name = document.createElement('span');
+  name.className = 'media-modal__creator-name';
+  name.textContent = clip.creator_name;
+  name.addEventListener('click', () => {
+    void openExternalUrl(twitchProfileUrl(clip.creator_name));
+  });
+  row.append(name);
+  dd.append(row);
+  list.append(dt, dd);
+}
+
+/**
+ * Fills the media preview modal info panel.
+ * @param kind Media type.
+ * @param item Clip or VOD metadata.
+ * @example fillMediaModalInfo('clip', clip);
+ */
+function fillMediaModalInfo(kind: 'clip' | 'video', item: ClipItem | VideoItem) {
+  if (!els.mediaModalInfo) return;
+  els.mediaModalInfo.replaceChildren();
+
+  const heading = document.createElement('h2');
+  heading.className = 'media-modal__title';
+  heading.id = 'media-modal-title';
+  heading.textContent = item.title;
+
+  const list = document.createElement('dl');
+  list.className = 'media-modal__facts';
+
+  const addFact = (label: string, value: string) => {
+    const dt = document.createElement('dt');
+    dt.textContent = label;
+    const dd = document.createElement('dd');
+    dd.textContent = value;
+    list.append(dt, dd);
+  };
+
+  addFact(t('modal_date'), formatDate(item.created_at));
+  addFact(t('modal_views'), String(item.view_count));
+  addFact(
+    t('modal_duration'),
+    kind === 'clip'
+      ? `${(item as ClipItem).duration.toFixed(0)}s`
+      : (item as VideoItem).duration
+  );
+
+  if (kind === 'clip') {
+    appendModalCreatorRow(list, item as ClipItem);
+    addFact(t('modal_channel'), (item as ClipItem).broadcaster_name);
+  } else {
+    addFact(t('modal_channel'), (item as VideoItem).user_name);
+  }
+
+  const actions = document.createElement('div');
+  actions.className = 'media-modal__actions';
+  const downloadBtn = document.createElement('button');
+  downloadBtn.type = 'button';
+  downloadBtn.className = 'btn btn-primary';
+  modalDownloadButton = downloadBtn;
+  configureDownloadButton(downloadBtn, item);
+
+  const openBtn = document.createElement('button');
+  openBtn.type = 'button';
+  openBtn.className = 'btn';
+  openBtn.textContent = t('modal_open_on_twitch');
+  openBtn.addEventListener('click', () => {
+    void openExternalUrl(item.url);
+  });
+  actions.append(downloadBtn, openBtn);
+
+  els.mediaModalInfo.append(heading, list, actions);
+}
+
+/**
+ * Opens the Twitch player modal for a clip or VOD.
+ * @param kind Media type.
+ * @param item Clip or VOD metadata.
+ * @example openMediaModal('video', vod);
+ */
+function openMediaModal(kind: 'clip' | 'video', item: ClipItem | VideoItem) {
+  if (!els.mediaModal || !els.mediaModalIframe) return;
+  activeModalMedia = { kind, item };
+  fillMediaModalInfo(kind, item);
+  els.mediaModalIframe.src = buildTwitchEmbedUrl(kind, item.id);
+  els.mediaModal.hidden = false;
+  els.mediaModalClose?.focus();
+}
+
+/**
+ * Closes the Twitch player modal and unloads the iframe.
+ * @example closeMediaModal();
+ */
+function closeMediaModal() {
+  if (!els.mediaModal || !els.mediaModalIframe) return;
+  activeModalMedia = null;
+  modalDownloadButton = null;
+  els.mediaModal.hidden = true;
+  els.mediaModalIframe.src = 'about:blank';
+}
+
+/**
  * Formats an ISO date for the list UI.
  * @param value ISO timestamp.
  * @returns Short locale date string.
@@ -438,22 +706,45 @@ function ensureListSentinel(list: HTMLElement | null) {
 }
 
 /**
- * Renders one media card with a download action and optional inline progress.
- * @param item Clip or VOD metadata.
- * @param details Secondary line (views, duration).
- * @returns DOM node for the list.
- * @example renderMediaItem(clip, 'details');
+ * Appends clip metadata with a clickable creator link.
+ * @param clip Clip metadata.
+ * @param container Details paragraph element.
+ * @example appendClipDetails(clip, info);
  */
-function renderMediaItem(
-  item: {
-    id: string;
-    title: string;
-    url: string;
-    thumbnail_url: string;
-    downloaded?: boolean;
-  },
-  details: string
-) {
+function appendClipDetails(clip: ClipItem, container: HTMLElement) {
+  container.append(
+    document.createTextNode(
+      `${formatDate(clip.created_at)} · ${clip.view_count} ${t('views')} · ${clip.duration.toFixed(0)}s · ${t('by')} `
+    )
+  );
+  const creator = document.createElement('span');
+  creator.className = 'media-item__creator';
+  creator.textContent = clip.creator_name;
+  creator.addEventListener('click', event => {
+    event.stopPropagation();
+    void openExternalUrl(twitchProfileUrl(clip.creator_name));
+  });
+  container.append(creator);
+}
+
+/**
+ * Appends VOD metadata to the details line.
+ * @param video VOD metadata.
+ * @param container Details paragraph element.
+ * @example appendVideoDetails(video, info);
+ */
+function appendVideoDetails(video: VideoItem, container: HTMLElement) {
+  container.textContent = `${formatDate(video.created_at)} · ${video.view_count} ${t('views')} · ${video.duration}`;
+}
+
+/**
+ * Renders one media card with a download action and optional inline progress.
+ * @param kind Media type (`clip` or `video`).
+ * @param item Clip or VOD metadata.
+ * @returns DOM node for the list.
+ * @example renderMediaItem('clip', clip);
+ */
+function renderMediaItem(kind: 'clip' | 'video', item: ClipItem | VideoItem) {
   const activeJob = findDownloadByUrl(item.url);
   const node = document.createElement('article');
   node.className = 'media-item';
@@ -471,12 +762,19 @@ function renderMediaItem(
   const meta = document.createElement('div');
   meta.className = 'media-item__meta';
   const title = document.createElement('h3');
-  title.className = 'media-item__title';
+  title.className = 'media-item__title media-item__title--clickable';
   title.textContent = item.title;
   title.title = item.title;
+  title.addEventListener('click', () => {
+    openMediaModal(kind, item);
+  });
   const info = document.createElement('p');
   info.className = 'media-item__details';
-  info.textContent = details;
+  if (kind === 'clip') {
+    appendClipDetails(item as ClipItem, info);
+  } else {
+    appendVideoDetails(item as VideoItem, info);
+  }
   meta.append(title, info);
 
   if (
@@ -499,25 +797,7 @@ function renderMediaItem(
   const button = document.createElement('button');
   button.type = 'button';
   button.className = 'btn btn-primary';
-
-  if (activeJob?.status === 'done') {
-    button.textContent = t('done');
-    button.disabled = true;
-  } else if (activeJob?.status === 'error') {
-    button.textContent = item.downloaded ? t('download_again') : t('download');
-    button.addEventListener('click', () => {
-      void startDownload(item.url, item.title, item.id);
-    });
-  } else if (activeJob) {
-    const percent = activeJob.progress?.percent ?? 0;
-    button.textContent = `${t('downloading')} ${percent.toFixed(0)}%`;
-    button.disabled = true;
-  } else {
-    button.textContent = item.downloaded ? t('download_again') : t('download');
-    button.addEventListener('click', () => {
-      void startDownload(item.url, item.title, item.id);
-    });
-  }
+  configureDownloadButton(button, item);
 
   actions.append(button);
   node.append(img, meta, actions);
@@ -571,19 +851,13 @@ function createListLoader(mode: 'full' | 'inline') {
  * @param options Render options for loading states and items.
  * @example renderMediaList(els.clipsList, { reloading: false, items: state.clips, ... });
  */
-function renderMediaList<T extends {
-  id: string;
-  title: string;
-  url: string;
-  thumbnail_url: string;
-  downloaded?: boolean;
-}>(
+function renderMediaList(
   listEl: HTMLElement | null,
   options: {
+    kind: 'clip' | 'video';
     reloading: boolean;
     loadingMore: boolean;
-    items: T[];
-    detailsFor: (item: T) => string;
+    items: ClipItem[] | VideoItem[];
   }
 ) {
   if (!listEl) return;
@@ -596,7 +870,7 @@ function renderMediaList<T extends {
   }
 
   options.items.forEach(item => {
-    listEl.append(renderMediaItem(item, options.detailsFor(item)));
+    listEl.append(renderMediaItem(options.kind, item));
   });
 
   ensureListSentinel(listEl);
@@ -612,19 +886,17 @@ function renderMediaList<T extends {
  */
 function renderLists() {
   renderMediaList(els.clipsList, {
+    kind: 'clip',
     reloading: state.clipsReloading,
     loadingMore: state.clipsLoadingMore,
     items: state.clips,
-    detailsFor: clip =>
-      `${formatDate(clip.created_at)} · ${clip.view_count} ${t('views')} · ${clip.duration.toFixed(0)}s · ${t('by')} ${clip.creator_name}`,
   });
 
   renderMediaList(els.videosList, {
+    kind: 'video',
     reloading: state.videosReloading,
     loadingMore: state.videosLoadingMore,
     items: state.videos,
-    detailsFor: video =>
-      `${formatDate(video.created_at)} · ${video.view_count} ${t('views')} · ${video.duration}`,
   });
 
   if (els.clipsDownloadAll)
@@ -698,6 +970,15 @@ function renderDownloads() {
   });
 
   renderLists();
+
+  if (
+    activeModalMedia &&
+    modalDownloadButton &&
+    els.mediaModal &&
+    !els.mediaModal.hidden
+  ) {
+    configureDownloadButton(modalDownloadButton, activeModalMedia.item);
+  }
 
   if (hadActive && !hasActiveDownloads()) {
     if (state.activeTab === 'clips') void loadClips(false);
@@ -1064,6 +1345,22 @@ function bindEvents() {
       reloadActiveTab();
     }
   });
+
+  els.filterClearBtn?.addEventListener('click', () => {
+    clearClipFilters();
+    if (state.activeTab === 'clips') void loadClips();
+  });
+
+  els.mediaModalClose?.addEventListener('click', closeMediaModal);
+  els.mediaModalBackdrop?.addEventListener('click', closeMediaModal);
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape' && els.mediaModal && !els.mediaModal.hidden) {
+      closeMediaModal();
+    }
+  });
+  if (els.mediaModalClose) {
+    els.mediaModalClose.setAttribute('aria-label', t('close'));
+  }
 
   els.openFolderBtn?.addEventListener('click', () => {
     void openDownloadFolder();

@@ -68,6 +68,9 @@
                   <input type="text" id="filter-exclude-creators" placeholder="user1, user2" autocomplete="off" />
                 </label>
               </div>
+              <div class="clip-filters__actions">
+                <button type="button" class="btn" id="filter-clear-btn" data-i18n="clear_filters">Clear filters</button>
+              </div>
               <p class="clip-filters__hint" data-i18n="filter_hint">
                 Twitch API filters by date range. Title, views, and creators are filtered locally after loading.
               </p>
@@ -117,6 +120,20 @@
         <div class="downloads-list" id="downloads-list"></div>
       </section>
     </div>
+
+    <div class="media-modal" id="media-modal" hidden>
+      <div class="media-modal__backdrop" id="media-modal-backdrop"></div>
+      <div class="media-modal__dialog" role="dialog" aria-modal="true" aria-labelledby="media-modal-title">
+        <button type="button" class="media-modal__close" id="media-modal-close" aria-label="Close">&times;</button>
+        <div class="media-modal__body">
+          <div class="media-modal__player">
+            <iframe id="media-modal-iframe" title="Twitch player" allowfullscreen></iframe>
+          </div>
+          <div class="media-modal__info" id="media-modal-info"></div>
+        </div>
+      </div>
+    </div>
+
     <script src="app.js"></script>
   </body>
 </html>
