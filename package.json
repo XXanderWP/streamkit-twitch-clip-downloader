@@ -1,6 +1,6 @@
 {
   "name": "streamkit-twitch-clip-downloader",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "private": true,
   "description": "Download public Twitch clips and VODs via yt-dlp.",
   "scripts": {
