@@ -28,6 +28,11 @@ const I18N = {
     filter_hint:
       'Twitch API filters by date range. Title, views, and creators are filtered locally after loading.',
     clear_filters: 'Clear filters',
+    sort_label: 'Sort by',
+    sort_date_desc: 'Date (newest first)',
+    sort_date_asc: 'Date (oldest first)',
+    sort_views_desc: 'Views (most first)',
+    sort_views_asc: 'Views (fewest first)',
     modal_title: 'Title',
     modal_date: 'Date',
     modal_views: 'Views',
@@ -73,6 +78,11 @@ const I18N = {
     filter_hint:
       'Диапазон дат фильтруется через Twitch API. Название, просмотры и авторы фильтруются локально после загрузки.',
     clear_filters: 'Очистить фильтры',
+    sort_label: 'Сортировка',
+    sort_date_desc: 'Дата (сначала новые)',
+    sort_date_asc: 'Дата (сначала старые)',
+    sort_views_desc: 'Просмотры (больше)',
+    sort_views_asc: 'Просмотры (меньше)',
     modal_title: 'Название',
     modal_date: 'Дата',
     modal_views: 'Просмотры',
@@ -118,6 +128,11 @@ const I18N = {
     filter_hint:
       'Діапазон дат фільтрується через Twitch API. Назва, перегляди та автори фільтруються локально після завантаження.',
     clear_filters: 'Очистити фільтри',
+    sort_label: 'Сортування',
+    sort_date_desc: 'Дата (спочатку нові)',
+    sort_date_asc: 'Дата (спочатку старі)',
+    sort_views_desc: 'Перегляди (більше)',
+    sort_views_asc: 'Перегляди (менше)',
     modal_title: 'Назва',
     modal_date: 'Дата',
     modal_views: 'Перегляди',
@@ -141,6 +156,18 @@ const I18N = {
 } as const;
 
 type Locale = keyof typeof I18N;
+
+/** Clip list sort field. */
+type ClipSortField = 'date' | 'views';
+
+/** Clip list sort order. */
+type ClipSortOrder = 'asc' | 'desc';
+
+/** Clip list sort state. */
+type ClipSortState = {
+  field: ClipSortField;
+  order: ClipSortOrder;
+};
 
 /** Clip filters sent to the worker clips endpoint. */
 type ClipFilterState = {
@@ -211,6 +238,7 @@ type AppState = {
   videosLoading: boolean;
   videosReloading: boolean;
   videosLoadingMore: boolean;
+  clipSort: ClipSortState;
   error: string;
 };
 
@@ -277,6 +305,7 @@ const state: AppState = {
   videosLoading: false,
   videosReloading: false,
   videosLoadingMore: false,
+  clipSort: { field: 'date', order: 'desc' },
   error: '',
 };
 
@@ -324,6 +353,9 @@ const els = {
   filterClearBtn: document.getElementById(
     'filter-clear-btn'
   ) as HTMLButtonElement | null,
+  clipSortSelect: document.getElementById(
+    'clip-sort'
+  ) as HTMLSelectElement | null,
   mediaModal: document.getElementById('media-modal'),
   mediaModalBackdrop: document.getElementById('media-modal-backdrop'),
   mediaModalClose: document.getElementById(
@@ -380,6 +412,91 @@ function applyStaticI18n() {
     if (key) node.textContent = t(key);
   });
   document.title = t('title');
+  applyClipSortOptions();
+}
+
+/**
+ * Returns the i18n label for a clip sort preset.
+ * @param field Sort field.
+ * @param order Sort order.
+ * @example clipSortLabel('date', 'desc');
+ */
+function clipSortLabel(field: ClipSortField, order: ClipSortOrder) {
+  if (field === 'date') {
+    return order === 'desc' ? t('sort_date_desc') : t('sort_date_asc');
+  }
+  return order === 'desc' ? t('sort_views_desc') : t('sort_views_asc');
+}
+
+/**
+ * Parses a clip sort preset from the clips sort select value.
+ * @param value Select option value.
+ * @returns Sort field and order.
+ * @example parseClipSortValue('views-asc');
+ */
+function parseClipSortValue(value: string): ClipSortState {
+  const [field, order] = value.split('-');
+  if (field === 'views' && (order === 'asc' || order === 'desc')) {
+    return { field: 'views', order };
+  }
+  if (field === 'date' && (order === 'asc' || order === 'desc')) {
+    return { field: 'date', order };
+  }
+  return { field: 'date', order: 'desc' };
+}
+
+/**
+ * Serializes clip sort state for the clips sort select.
+ * @param sort Current sort state.
+ * @returns Select option value.
+ * @example clipSortValue({ field: 'date', order: 'desc' });
+ */
+function clipSortValue(sort: ClipSortState) {
+  return `${sort.field}-${sort.order}`;
+}
+
+/**
+ * Rebuilds localized clip sort select options.
+ * @example applyClipSortOptions();
+ */
+function applyClipSortOptions() {
+  if (!els.clipSortSelect) return;
+  const current = clipSortValue(state.clipSort);
+  els.clipSortSelect.replaceChildren();
+  (
+    [
+      { field: 'date', order: 'desc' },
+      { field: 'date', order: 'asc' },
+      { field: 'views', order: 'desc' },
+      { field: 'views', order: 'asc' },
+    ] as const
+  ).forEach(option => {
+    const node = document.createElement('option');
+    node.value = clipSortValue(option);
+    node.textContent = clipSortLabel(option.field, option.order);
+    els.clipSortSelect?.append(node);
+  });
+  els.clipSortSelect.value = current;
+}
+
+/**
+ * Sorts loaded clips for display.
+ * @param clips Clip items from state.
+ * @returns Sorted clip array.
+ * @example sortClips(state.clips);
+ */
+function sortClips(clips: ClipItem[]) {
+  const { field, order } = state.clipSort;
+  const direction = order === 'asc' ? 1 : -1;
+  return [...clips].sort((left, right) => {
+    const delta =
+      field === 'date'
+        ? new Date(left.created_at).getTime() -
+          new Date(right.created_at).getTime()
+        : left.view_count - right.view_count;
+    if (delta === 0) return 0;
+    return delta > 0 ? direction : -direction;
+  });
 }
 
 /**
@@ -797,6 +914,9 @@ function renderMediaItem(kind: 'clip' | 'video', item: ClipItem | VideoItem) {
     img.hidden = true;
     node.classList.add('media-item--no-thumb');
   });
+  img.addEventListener('click', () => {
+    openMediaModal(kind, item);
+  });
 
   const meta = document.createElement('div');
   meta.className = 'media-item__meta';
@@ -928,7 +1048,7 @@ function renderLists() {
     kind: 'clip',
     reloading: state.clipsReloading,
     loadingMore: state.clipsLoadingMore,
-    items: state.clips,
+    items: sortClips(state.clips),
   });
 
   renderMediaList(els.videosList, {
@@ -1391,6 +1511,11 @@ function bindEvents() {
   els.filterClearBtn?.addEventListener('click', () => {
     clearClipFilters();
     if (state.activeTab === 'clips') void loadClips();
+  });
+
+  els.clipSortSelect?.addEventListener('change', () => {
+    state.clipSort = parseClipSortValue(els.clipSortSelect?.value ?? '');
+    renderLists();
   });
 
   els.mediaModalClose?.addEventListener('click', closeMediaModal);
