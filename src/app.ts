@@ -553,26 +553,6 @@ function applyClipSortOptions() {
 }
 
 /**
- * Sorts loaded clips for display.
- * @param clips Clip items from state.
- * @returns Sorted clip array.
- * @example sortClips(state.clips);
- */
-function sortClips(clips: ClipItem[]) {
-  const { field, order } = state.clipSort;
-  const direction = order === 'asc' ? 1 : -1;
-  return [...clips].sort((left, right) => {
-    const delta =
-      field === 'date'
-        ? new Date(left.created_at).getTime() -
-          new Date(right.created_at).getTime()
-        : left.view_count - right.view_count;
-    if (delta === 0) return 0;
-    return delta > 0 ? direction : -direction;
-  });
-}
-
-/**
  * Builds an authenticated addon API URL.
  * @param path Endpoint path relative to the addon worker.
  * @param query Optional query parameters.
@@ -630,7 +610,10 @@ function readClipFilters(): ClipFilterState {
  * @example buildClipQuery(readClipFilters());
  */
 function buildClipQuery(filters: ClipFilterState) {
-  const query: Record<string, string> = {};
+  const query: Record<string, string> = {
+    sort_field: state.clipSort.field,
+    sort_order: state.clipSort.order,
+  };
   if (filters.title) query.title = filters.title;
   if (filters.dateFrom) query.started_at = filters.dateFrom;
   if (filters.dateTo) query.ended_at = filters.dateTo;
@@ -1121,7 +1104,7 @@ function renderLists() {
     kind: 'clip',
     reloading: state.clipsReloading,
     loadingMore: state.clipsLoadingMore,
-    items: sortClips(state.clips),
+    items: state.clips,
   });
 
   renderMediaList(els.videosList, {
@@ -1634,7 +1617,7 @@ async function handleClipsDownloadAll() {
   if (state.clips.length === 0) return;
 
   if (!state.clipsCursor) {
-    await downloadAll(sortClips(state.clips));
+    await downloadAll(state.clips);
     return;
   }
 
@@ -1647,7 +1630,7 @@ async function handleClipsDownloadAll() {
  */
 async function downloadLoadedClipsOnly() {
   closeDownloadAllModal();
-  await downloadAll(sortClips(state.clips));
+  await downloadAll(state.clips);
 }
 
 /**
@@ -1669,7 +1652,7 @@ async function downloadAllClipsAfterLoad() {
   }
 
   closeDownloadAllModal();
-  await downloadAll(sortClips(state.clips));
+  await downloadAll(state.clips);
 }
 
 /**
@@ -1799,7 +1782,7 @@ function bindEvents() {
 
   els.clipSortSelect?.addEventListener('change', () => {
     state.clipSort = parseClipSortValue(els.clipSortSelect?.value ?? '');
-    renderLists();
+    void loadClips(false);
   });
 
   els.mediaModalClose?.addEventListener('click', closeMediaModal);

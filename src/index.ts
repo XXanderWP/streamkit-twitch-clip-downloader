@@ -81,6 +81,25 @@ type ClipFilters = {
   excludeCreators: string[];
 };
 
+/** Clip list sort field. */
+type ClipSortField = 'date' | 'views';
+
+/** Clip list sort order. */
+type ClipSortOrder = 'asc' | 'desc';
+
+/** Clip list sort options from the UI. */
+type ClipSort = {
+  field: ClipSortField;
+  order: ClipSortOrder;
+};
+
+/** Cached sorted clip scan used for non-native API sort modes. */
+type SortedClipsCacheEntry = {
+  clips: TwitchClip[];
+  complete: boolean;
+  expiresAt: number;
+};
+
 /** Earliest date Twitch clips can exist (service launch). */
 const TWITCH_EPOCH_START = '2011-06-01T00:00:00Z';
 
@@ -98,6 +117,11 @@ const CLIPS_PAGE_SIZE = 20;
 const CLIPS_FETCH_SIZE = 100;
 const CLIPS_MAX_SCAN_PAGES = 10;
 const CLIPS_COUNT_MAX_SCAN_PAGES = 200;
+const SORTED_CLIPS_CACHE_TTL_MS = 5 * 60 * 1000;
+const SORT_OFFSET_CURSOR_PREFIX = 'offset:';
+
+/** Sorted clip scans keyed by broadcaster, filters, and sort mode. */
+const sortedClipsCache = new Map<string, SortedClipsCacheEntry>();
 
 /**
  * Reads persisted addon settings from the main process.
@@ -502,6 +526,193 @@ function parseClipFilters(query: Record<string, unknown>): ClipFilters {
 }
 
 /**
+ * Parses clip sort options from an HTTP query object.
+ * @param query Endpoint query parameters.
+ * @returns Normalized clip sort state.
+ * @example
+ * const sort = parseClipSort(query);
+ */
+function parseClipSort(query: Record<string, unknown>): ClipSort {
+  return {
+    field: query.sort_field === 'views' ? 'views' : 'date',
+    order: query.sort_order === 'asc' ? 'asc' : 'desc',
+  };
+}
+
+/**
+ * Returns true when Twitch returns clips in the requested order natively.
+ * @param sort Clip sort state from the UI.
+ * @example
+ * usesApiClipSort({ field: 'views', order: 'desc' });
+ */
+function usesApiClipSort(sort: ClipSort) {
+  return sort.field === 'views' && sort.order === 'desc';
+}
+
+/**
+ * Compares two clips for server-side sorting.
+ * @param left Left clip.
+ * @param right Right clip.
+ * @param sort Active sort mode.
+ * @returns Comparison result for Array.sort.
+ * @example
+ * compareClipsForSort(left, right, sort);
+ */
+function compareClipsForSort(
+  left: TwitchClip,
+  right: TwitchClip,
+  sort: ClipSort
+) {
+  const delta =
+    sort.field === 'date'
+      ? new Date(left.created_at).getTime() -
+        new Date(right.created_at).getTime()
+      : left.view_count - right.view_count;
+  if (delta === 0) return 0;
+  return sort.order === 'asc' ? (delta > 0 ? 1 : -1) : delta > 0 ? -1 : 1;
+}
+
+/**
+ * Builds a cache key for a sorted clip scan.
+ * @param broadcasterId Twitch broadcaster id.
+ * @param filters Active clip filters.
+ * @param sort Active clip sort mode.
+ * @returns Stable cache key.
+ * @example
+ * buildSortedClipsCacheKey('123', filters, sort);
+ */
+function buildSortedClipsCacheKey(
+  broadcasterId: string,
+  filters: ClipFilters,
+  sort: ClipSort
+) {
+  return JSON.stringify({ broadcasterId, filters, sort });
+}
+
+/**
+ * Parses an offset cursor used for server-sorted clip pagination.
+ * @param cursor Cursor from the UI.
+ * @returns Zero-based offset into the sorted clip list.
+ * @example
+ * parseSortOffsetCursor('offset:40');
+ */
+function parseSortOffsetCursor(cursor: string | null) {
+  if (!cursor?.startsWith(SORT_OFFSET_CURSOR_PREFIX)) return 0;
+  const raw = Number(cursor.slice(SORT_OFFSET_CURSOR_PREFIX.length));
+  return Number.isFinite(raw) && raw > 0 ? raw : 0;
+}
+
+/**
+ * Serializes an offset cursor for server-sorted clip pagination.
+ * @param offset Zero-based offset into the sorted clip list.
+ * @returns Opaque pagination cursor.
+ * @example
+ * buildSortOffsetCursor(40);
+ */
+function buildSortOffsetCursor(offset: number) {
+  return `${SORT_OFFSET_CURSOR_PREFIX}${offset}`;
+}
+
+/**
+ * Builds Twitch Helix query parameters for a clip page request.
+ * @param broadcasterId Twitch broadcaster id.
+ * @param filters Active clip filters.
+ * @param cursor Twitch pagination cursor.
+ * @returns URLSearchParams for Helix Get Clips.
+ * @example
+ * buildClipHelixParams('123', filters, null);
+ */
+function buildClipHelixParams(
+  broadcasterId: string,
+  filters: ClipFilters,
+  cursor: string | null
+) {
+  const params = new URLSearchParams({
+    broadcaster_id: broadcasterId,
+    first: String(CLIPS_FETCH_SIZE),
+  });
+  if (cursor) params.set('after', cursor);
+  const { startedAt, endedAt } = resolveClipApiDateRange(filters);
+  if (startedAt) params.set('started_at', startedAt);
+  if (endedAt) params.set('ended_at', endedAt);
+  return params;
+}
+
+/**
+ * Scans Twitch clip pages and returns every clip that matches local filters.
+ * @param broadcasterId Twitch broadcaster id.
+ * @param filters Active clip filters.
+ * @returns Matching clips and whether the scan finished.
+ * @example
+ * const result = await collectAllFilteredClips('123', filters);
+ */
+async function collectAllFilteredClips(
+  broadcasterId: string,
+  filters: ClipFilters
+) {
+  const collected: TwitchClip[] = [];
+  let nextCursor: string | null = null;
+  let scannedPages = 0;
+
+  while (scannedPages < CLIPS_COUNT_MAX_SCAN_PAGES) {
+    const response = await twitchApiGet<HelixListResponse<TwitchClip>>(
+      `https://api.twitch.tv/helix/clips?${buildClipHelixParams(
+        broadcasterId,
+        filters,
+        nextCursor
+      ).toString()}`
+    );
+    const batch = response.data ?? [];
+    nextCursor = response.pagination?.cursor ?? null;
+
+    for (const clip of batch) {
+      if (!matchesClipFilters(clip, filters)) continue;
+      collected.push(clip);
+    }
+
+    if (!nextCursor || batch.length === 0) {
+      return { clips: collected, complete: true };
+    }
+    scannedPages += 1;
+  }
+
+  return { clips: collected, complete: false };
+}
+
+/**
+ * Returns a cached sorted clip list for the active filters and sort mode.
+ * @param broadcasterId Twitch broadcaster id.
+ * @param filters Active clip filters.
+ * @param sort Active clip sort mode.
+ * @returns Sorted clips and whether the scan finished.
+ * @example
+ * const page = await getSortedFilteredClips('123', filters, sort);
+ */
+async function getSortedFilteredClips(
+  broadcasterId: string,
+  filters: ClipFilters,
+  sort: ClipSort
+) {
+  const cacheKey = buildSortedClipsCacheKey(broadcasterId, filters, sort);
+  const cached = sortedClipsCache.get(cacheKey);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached;
+  }
+
+  const scanned = await collectAllFilteredClips(broadcasterId, filters);
+  const clips = [...scanned.clips].sort((left, right) =>
+    compareClipsForSort(left, right, sort)
+  );
+  const entry: SortedClipsCacheEntry = {
+    clips,
+    complete: scanned.complete,
+    expiresAt: Date.now() + SORTED_CLIPS_CACHE_TTL_MS,
+  };
+  sortedClipsCache.set(cacheKey, entry);
+  return entry;
+}
+
+/**
  * Twitch requires both `started_at` and `ended_at`; fills missing bounds when only one date is set.
  * @param filters Parsed clip filters from the UI.
  * @returns API-ready date range or empty when no date filter is active.
@@ -574,15 +785,15 @@ function matchesClipFilters(clip: TwitchClip, filters: ClipFilters) {
 }
 
 /**
- * Fetches clips from Twitch with API date filters and local post-filtering.
+ * Fetches one page of clips sorted by view count using native Twitch pagination.
  * @param broadcasterId Twitch broadcaster id.
  * @param filters Clip filters from the UI.
- * @param cursor Pagination cursor.
- * @returns Matching clips and the next cursor.
+ * @param cursor Twitch pagination cursor.
+ * @returns Matching clips and the next Twitch cursor.
  * @example
- * const page = await fetchFilteredClips('123', filters, null);
+ * const page = await fetchApiSortedClipsPage('123', filters, null);
  */
-async function fetchFilteredClips(
+async function fetchApiSortedClipsPage(
   broadcasterId: string,
   filters: ClipFilters,
   cursor: string | null
@@ -595,17 +806,12 @@ async function fetchFilteredClips(
     collected.length < CLIPS_PAGE_SIZE &&
     scannedPages < CLIPS_MAX_SCAN_PAGES
   ) {
-    const params = new URLSearchParams({
-      broadcaster_id: broadcasterId,
-      first: String(CLIPS_FETCH_SIZE),
-    });
-    if (nextCursor) params.set('after', nextCursor);
-    const { startedAt, endedAt } = resolveClipApiDateRange(filters);
-    if (startedAt) params.set('started_at', startedAt);
-    if (endedAt) params.set('ended_at', endedAt);
-
     const response = await twitchApiGet<HelixListResponse<TwitchClip>>(
-      `https://api.twitch.tv/helix/clips?${params.toString()}`
+      `https://api.twitch.tv/helix/clips?${buildClipHelixParams(
+        broadcasterId,
+        filters,
+        nextCursor
+      ).toString()}`
     );
     const batch = response.data ?? [];
     nextCursor = response.pagination?.cursor ?? null;
@@ -627,6 +833,58 @@ async function fetchFilteredClips(
 }
 
 /**
+ * Fetches one page from a server-sorted clip scan.
+ * @param broadcasterId Twitch broadcaster id.
+ * @param filters Clip filters from the UI.
+ * @param sort Active clip sort mode.
+ * @param cursor Offset cursor from the UI.
+ * @returns Matching clips and the next offset cursor.
+ * @example
+ * const page = await fetchSortedClipsPage('123', filters, sort, null);
+ */
+async function fetchSortedClipsPage(
+  broadcasterId: string,
+  filters: ClipFilters,
+  sort: ClipSort,
+  cursor: string | null
+) {
+  const offset = parseSortOffsetCursor(cursor);
+  const sorted = await getSortedFilteredClips(broadcasterId, filters, sort);
+  const nextOffset = offset + CLIPS_PAGE_SIZE;
+
+  return {
+    clips: sorted.clips.slice(offset, nextOffset),
+    cursor:
+      nextOffset < sorted.clips.length
+        ? buildSortOffsetCursor(nextOffset)
+        : null,
+    scanComplete: sorted.complete,
+  };
+}
+
+/**
+ * Fetches clips from Twitch with API date filters, sort mode, and local post-filtering.
+ * @param broadcasterId Twitch broadcaster id.
+ * @param filters Clip filters from the UI.
+ * @param sort Clip sort mode from the UI.
+ * @param cursor Pagination cursor.
+ * @returns Matching clips and the next cursor.
+ * @example
+ * const page = await fetchFilteredClips('123', filters, sort, null);
+ */
+async function fetchFilteredClips(
+  broadcasterId: string,
+  filters: ClipFilters,
+  sort: ClipSort,
+  cursor: string | null
+) {
+  if (usesApiClipSort(sort)) {
+    return fetchApiSortedClipsPage(broadcasterId, filters, cursor);
+  }
+  return fetchSortedClipsPage(broadcasterId, filters, sort, cursor);
+}
+
+/**
  * Counts clips that match the active filters by scanning Twitch pagination.
  * @param broadcasterId Twitch broadcaster id.
  * @param filters Clip filters from the UI.
@@ -638,38 +896,11 @@ async function countFilteredClips(
   broadcasterId: string,
   filters: ClipFilters
 ) {
-  let count = 0;
-  let nextCursor: string | null = null;
-  let scannedPages = 0;
-
-  while (scannedPages < CLIPS_COUNT_MAX_SCAN_PAGES) {
-    const params = new URLSearchParams({
-      broadcaster_id: broadcasterId,
-      first: String(CLIPS_FETCH_SIZE),
-    });
-    if (nextCursor) params.set('after', nextCursor);
-    const { startedAt, endedAt } = resolveClipApiDateRange(filters);
-    if (startedAt) params.set('started_at', startedAt);
-    if (endedAt) params.set('ended_at', endedAt);
-
-    const response = await twitchApiGet<HelixListResponse<TwitchClip>>(
-      `https://api.twitch.tv/helix/clips?${params.toString()}`
-    );
-    const batch = response.data ?? [];
-    nextCursor = response.pagination?.cursor ?? null;
-
-    for (const clip of batch) {
-      if (!matchesClipFilters(clip, filters)) continue;
-      count += 1;
-    }
-
-    if (!nextCursor || batch.length === 0) {
-      return { count, complete: true };
-    }
-    scannedPages += 1;
-  }
-
-  return { count, complete: false };
+  const result = await collectAllFilteredClips(broadcasterId, filters);
+  return {
+    count: result.clips.length,
+    complete: result.complete,
+  };
 }
 
 /**
@@ -884,6 +1115,7 @@ void (async () => {
       const cursor =
         typeof query.cursor === 'string' ? query.cursor.trim() : '';
       const filters = parseClipFilters(query);
+      const sort = parseClipSort(query);
       const { broadcasterId, displayName } = await resolveBroadcaster(
         login || undefined
       );
@@ -892,6 +1124,7 @@ void (async () => {
       const page = await fetchFilteredClips(
         broadcasterId,
         filters,
+        sort,
         cursor || null
       );
       const enrichedClips = await enrichClipsWithCreatorProfiles(page.clips);
