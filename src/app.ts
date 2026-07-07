@@ -61,6 +61,7 @@ const I18N = {
     download_all_message_total_incomplete:
       '%1 clips loaded. At least %2 clips match your filters.',
     download_all_load_and_download: 'Load all (%2), then download',
+    download_all_load_and_download_pending: 'Load all, then download',
     download_all_shown_only: 'Download loaded only (%1)',
     cancel: 'Cancel',
     download_all_loading: 'Loading all clips… (%1 loaded)',
@@ -123,6 +124,7 @@ const I18N = {
     download_all_message_total_incomplete:
       'Загружено %1 клипов. Не менее %2 подходят под фильтры.',
     download_all_load_and_download: 'Загрузить все (%2), затем скачать',
+    download_all_load_and_download_pending: 'Загрузить все, затем скачать',
     download_all_shown_only: 'Скачать только загруженные (%1)',
     cancel: 'Отмена',
     download_all_loading: 'Загрузка всех клипов… (загружено %1)',
@@ -185,6 +187,7 @@ const I18N = {
     download_all_message_total_incomplete:
       'Завантажено %1 кліпів. Щонайменше %2 відповідають фільтрам.',
     download_all_load_and_download: 'Завантажити всі (%2), потім скачати',
+    download_all_load_and_download_pending: 'Завантажити всі, потім скачати',
     download_all_shown_only: 'Скачати лише завантажені (%1)',
     cancel: 'Скасувати',
     download_all_loading: 'Завантаження всіх кліпів… (завантажено %1)',
@@ -320,6 +323,7 @@ function applyLocale(locale: Locale) {
   if (changed) {
     renderLists();
     if (els.downloadAllModal && !els.downloadAllModal.hidden) {
+      updateDownloadAllModal({ phase: 'counting' });
       void openDownloadAllModal();
     }
   }
@@ -1452,10 +1456,7 @@ async function downloadAll(
 async function loadAllClips() {
   while (state.clipsCursor) {
     if (els.downloadAllModal && !els.downloadAllModal.hidden) {
-      updateDownloadAllModal({
-        message: tf('download_all_loading', { 1: state.clips.length }),
-        busy: true,
-      });
+      updateDownloadAllModal({ phase: 'loading' });
     }
 
     const previousCount = state.clips.length;
@@ -1499,40 +1500,82 @@ async function fetchClipCount() {
 }
 
 /**
- * Updates the download-all modal labels and message.
- * @param options Modal content and button state.
- * @example updateDownloadAllModal({ message: '...', busy: false });
+ * Updates the download-all modal labels and button state.
+ * @param state Modal phase and optional content.
+ * @example updateDownloadAllModal({ phase: 'counting' });
  */
-function updateDownloadAllModal(options: {
-  message: string;
-  totalCount?: number | null;
-  busy?: boolean;
-}) {
+function updateDownloadAllModal(
+  modalState:
+    | { phase: 'counting' }
+    | { phase: 'loading' }
+    | {
+        phase: 'ready';
+        message: string;
+        totalCount: number | null;
+      }
+) {
   const loadedCount = state.clips.length;
-  const totalCount = options.totalCount ?? null;
+
+  if (modalState.phase === 'counting') {
+    if (els.downloadAllModalMessage) {
+      els.downloadAllModalMessage.textContent = t('download_all_counting');
+    }
+    if (els.downloadAllModalShownBtn) {
+      els.downloadAllModalShownBtn.textContent = tf('download_all_shown_only', {
+        1: loadedCount,
+      });
+      els.downloadAllModalShownBtn.disabled = true;
+    }
+    if (els.downloadAllModalLoadBtn) {
+      els.downloadAllModalLoadBtn.textContent = t(
+        'download_all_load_and_download_pending'
+      );
+      els.downloadAllModalLoadBtn.disabled = true;
+    }
+    if (els.downloadAllModalCancelBtn) {
+      els.downloadAllModalCancelBtn.disabled = false;
+    }
+    return;
+  }
+
+  if (modalState.phase === 'loading') {
+    if (els.downloadAllModalMessage) {
+      els.downloadAllModalMessage.textContent = tf('download_all_loading', {
+        1: loadedCount,
+      });
+    }
+    if (els.downloadAllModalShownBtn) {
+      els.downloadAllModalShownBtn.disabled = true;
+    }
+    if (els.downloadAllModalLoadBtn) {
+      els.downloadAllModalLoadBtn.disabled = true;
+    }
+    if (els.downloadAllModalCancelBtn) {
+      els.downloadAllModalCancelBtn.disabled = true;
+    }
+    return;
+  }
+
+  const totalCount = modalState.totalCount;
 
   if (els.downloadAllModalMessage) {
-    els.downloadAllModalMessage.textContent = options.message;
+    els.downloadAllModalMessage.textContent = modalState.message;
   }
   if (els.downloadAllModalShownBtn) {
     els.downloadAllModalShownBtn.textContent = tf('download_all_shown_only', {
       1: loadedCount,
     });
-    els.downloadAllModalShownBtn.disabled = Boolean(options.busy);
+    els.downloadAllModalShownBtn.disabled = false;
   }
   if (els.downloadAllModalLoadBtn) {
-    const loadTotal =
+    els.downloadAllModalLoadBtn.textContent =
       totalCount !== null && totalCount > loadedCount
-        ? totalCount
-        : loadedCount + 1;
-    els.downloadAllModalLoadBtn.textContent = tf(
-      'download_all_load_and_download',
-      { 2: loadTotal }
-    );
-    els.downloadAllModalLoadBtn.disabled = Boolean(options.busy);
+        ? tf('download_all_load_and_download', { 2: totalCount })
+        : t('download_all_load_and_download_pending');
+    els.downloadAllModalLoadBtn.disabled = false;
   }
   if (els.downloadAllModalCancelBtn) {
-    els.downloadAllModalCancelBtn.disabled = Boolean(options.busy);
+    els.downloadAllModalCancelBtn.disabled = false;
   }
 }
 
@@ -1555,12 +1598,6 @@ async function openDownloadAllModal() {
   const requestId = ++downloadAllCountRequestId;
   const loadedCount = state.clips.length;
 
-  updateDownloadAllModal({
-    message: tf('download_all_message_more', { 1: loadedCount }),
-    totalCount: null,
-    busy: false,
-  });
-
   if (els.downloadAllModalTitle) {
     els.downloadAllModalTitle.textContent = t('download_all_title');
   }
@@ -1569,13 +1606,8 @@ async function openDownloadAllModal() {
   }
 
   els.downloadAllModal.hidden = false;
-  els.downloadAllModalLoadBtn?.focus();
-
-  updateDownloadAllModal({
-    message: t('download_all_counting'),
-    totalCount: null,
-    busy: false,
-  });
+  updateDownloadAllModal({ phase: 'counting' });
+  els.downloadAllModalCancelBtn?.focus();
 
   try {
     const total = await fetchClipCount();
@@ -1595,16 +1627,16 @@ async function openDownloadAllModal() {
             });
 
     updateDownloadAllModal({
+      phase: 'ready',
       message,
       totalCount: total.count,
-      busy: false,
     });
   } catch {
     if (requestId !== downloadAllCountRequestId) return;
     updateDownloadAllModal({
+      phase: 'ready',
       message: tf('download_all_message_more', { 1: loadedCount }),
       totalCount: null,
-      busy: false,
     });
   }
 }
@@ -1640,10 +1672,7 @@ async function downloadLoadedClipsOnly() {
 async function downloadAllClipsAfterLoad() {
   if (!els.downloadAllModal) return;
 
-  updateDownloadAllModal({
-    message: tf('download_all_loading', { 1: state.clips.length }),
-    busy: true,
-  });
+  updateDownloadAllModal({ phase: 'loading' });
 
   const loaded = await loadAllClips();
   if (!loaded) {
