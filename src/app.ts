@@ -52,6 +52,18 @@ const I18N = {
     queued: 'Queued',
     done: 'Done',
     failed: 'Failed',
+    download_all_title: 'Download all clips',
+    download_all_counting: 'Counting matching clips…',
+    download_all_message_more:
+      '%1 clips loaded. More clips match your filters.',
+    download_all_message_total:
+      '%1 clips loaded out of %2 matching your filters.',
+    download_all_message_total_incomplete:
+      '%1 clips loaded. At least %2 clips match your filters.',
+    download_all_load_and_download: 'Load all (%2), then download',
+    download_all_shown_only: 'Download loaded only (%1)',
+    cancel: 'Cancel',
+    download_all_loading: 'Loading all clips… (%1 loaded)',
   },
   ru: {
     title: 'Загрузчик клипов и записей Twitch',
@@ -102,6 +114,18 @@ const I18N = {
     queued: 'В очереди',
     done: 'Готово',
     failed: 'Ошибка',
+    download_all_title: 'Скачать все клипы',
+    download_all_counting: 'Подсчёт подходящих клипов…',
+    download_all_message_more:
+      'Загружено %1 клипов. Есть ещё клипы, подходящие под фильтры.',
+    download_all_message_total:
+      'Загружено %1 из %2 клипов, подходящих под фильтры.',
+    download_all_message_total_incomplete:
+      'Загружено %1 клипов. Не менее %2 подходят под фильтры.',
+    download_all_load_and_download: 'Загрузить все (%2), затем скачать',
+    download_all_shown_only: 'Скачать только загруженные (%1)',
+    cancel: 'Отмена',
+    download_all_loading: 'Загрузка всех клипов… (загружено %1)',
   },
   uk: {
     title: 'Завантажувач кліпів і записів Twitch',
@@ -152,6 +176,18 @@ const I18N = {
     queued: 'У черзі',
     done: 'Готово',
     failed: 'Помилка',
+    download_all_title: 'Завантажити всі кліпи',
+    download_all_counting: 'Підрахунок кліпів за фільтрами…',
+    download_all_message_more:
+      'Завантажено %1 кліпів. Є ще кліпи, що відповідають фільтрам.',
+    download_all_message_total:
+      'Завантажено %1 з %2 кліпів, що відповідають фільтрам.',
+    download_all_message_total_incomplete:
+      'Завантажено %1 кліпів. Щонайменше %2 відповідають фільтрам.',
+    download_all_load_and_download: 'Завантажити всі (%2), потім скачати',
+    download_all_shown_only: 'Скачати лише завантажені (%1)',
+    cancel: 'Скасувати',
+    download_all_loading: 'Завантаження всіх кліпів… (завантажено %1)',
   },
 } as const;
 
@@ -283,6 +319,9 @@ function applyLocale(locale: Locale) {
 
   if (changed) {
     renderLists();
+    if (els.downloadAllModal && !els.downloadAllModal.hidden) {
+      void openDownloadAllModal();
+    }
   }
 }
 
@@ -365,6 +404,21 @@ const els = {
     'media-modal-iframe'
   ) as HTMLIFrameElement | null,
   mediaModalInfo: document.getElementById('media-modal-info'),
+  downloadAllModal: document.getElementById('download-all-modal'),
+  downloadAllModalBackdrop: document.getElementById(
+    'download-all-modal-backdrop'
+  ),
+  downloadAllModalTitle: document.getElementById('download-all-modal-title'),
+  downloadAllModalMessage: document.getElementById('download-all-modal-message'),
+  downloadAllModalLoadBtn: document.getElementById(
+    'download-all-modal-load'
+  ) as HTMLButtonElement | null,
+  downloadAllModalShownBtn: document.getElementById(
+    'download-all-modal-shown'
+  ) as HTMLButtonElement | null,
+  downloadAllModalCancelBtn: document.getElementById(
+    'download-all-modal-cancel'
+  ) as HTMLButtonElement | null,
   urlInput: document.getElementById('url-input') as HTMLInputElement | null,
   urlDownloadBtn: document.getElementById('url-download-btn'),
   errorMessage: document.getElementById(
@@ -391,6 +445,25 @@ let activeModalMedia: {
   item: ClipItem | VideoItem;
 } | null = null;
 let modalDownloadButton: HTMLButtonElement | null = null;
+let downloadAllCountRequestId = 0;
+
+/**
+ * Replaces numbered placeholders in localized strings.
+ * @param key Translation key.
+ * @param values Placeholder values keyed by index (`1`, `2`, …).
+ * @returns Localized string with placeholders replaced.
+ * @example tf('download_all_shown_only', { 1: 20 });
+ */
+function tf(
+  key: keyof (typeof I18N)['en'],
+  values: Record<number, string | number> = {}
+) {
+  let text = t(key);
+  for (const [index, value] of Object.entries(values)) {
+    text = text.replaceAll(`%${index}`, String(value));
+  }
+  return text;
+}
 
 /**
  * Returns a localized UI string for the active locale.
@@ -1372,7 +1445,7 @@ async function startDownload(url: string, title: string, mediaId?: string) {
 }
 
 /**
- * Queues downloads for every item currently shown in the active list.
+ * Queues downloads for every item in the provided list.
  * @param items Clip or VOD entries to download.
  * @example await downloadAll(state.clips);
  */
@@ -1386,6 +1459,217 @@ async function downloadAll(
     }
     await startDownload(item.url, item.title, item.id);
   }
+}
+
+/**
+ * Loads every clip page until the cursor is exhausted.
+ * @returns Whether all available clips were loaded.
+ * @example await loadAllClips();
+ */
+async function loadAllClips() {
+  while (state.clipsCursor) {
+    if (els.downloadAllModal && !els.downloadAllModal.hidden) {
+      updateDownloadAllModal({
+        message: tf('download_all_loading', { 1: state.clips.length }),
+        busy: true,
+      });
+    }
+
+    const previousCount = state.clips.length;
+    await loadClips(true);
+    if (!state.clipsCursor) break;
+    if (state.clips.length === previousCount) {
+      setError(t('error_generic'));
+      return false;
+    }
+  }
+  return true;
+}
+
+/**
+ * Fetches the total number of clips matching the active filters.
+ * @returns Total count and whether the scan completed.
+ * @example await fetchClipCount();
+ */
+async function fetchClipCount() {
+  const login = els.channelInput?.value.trim() ?? '';
+  const query: Record<string, string> = {
+    ...buildClipQuery(readClipFilters()),
+  };
+  if (login) query.login = login;
+
+  const result = await apiFetch<{
+    ok?: boolean;
+    error?: string;
+    count?: number;
+    complete?: boolean;
+  }>('clips-count', {}, query);
+
+  if (!result.ok) {
+    throw new Error(result.error ?? t('error_generic'));
+  }
+
+  return {
+    count: result.count ?? 0,
+    complete: result.complete ?? false,
+  };
+}
+
+/**
+ * Updates the download-all modal labels and message.
+ * @param options Modal content and button state.
+ * @example updateDownloadAllModal({ message: '...', busy: false });
+ */
+function updateDownloadAllModal(options: {
+  message: string;
+  totalCount?: number | null;
+  busy?: boolean;
+}) {
+  const loadedCount = state.clips.length;
+  const totalCount = options.totalCount ?? null;
+
+  if (els.downloadAllModalMessage) {
+    els.downloadAllModalMessage.textContent = options.message;
+  }
+  if (els.downloadAllModalShownBtn) {
+    els.downloadAllModalShownBtn.textContent = tf('download_all_shown_only', {
+      1: loadedCount,
+    });
+    els.downloadAllModalShownBtn.disabled = Boolean(options.busy);
+  }
+  if (els.downloadAllModalLoadBtn) {
+    const loadTotal =
+      totalCount !== null && totalCount > loadedCount
+        ? totalCount
+        : loadedCount + 1;
+    els.downloadAllModalLoadBtn.textContent = tf(
+      'download_all_load_and_download',
+      { 2: loadTotal }
+    );
+    els.downloadAllModalLoadBtn.disabled = Boolean(options.busy);
+  }
+  if (els.downloadAllModalCancelBtn) {
+    els.downloadAllModalCancelBtn.disabled = Boolean(options.busy);
+  }
+}
+
+/**
+ * Closes the download-all confirmation modal.
+ * @example closeDownloadAllModal();
+ */
+function closeDownloadAllModal() {
+  downloadAllCountRequestId += 1;
+  if (els.downloadAllModal) els.downloadAllModal.hidden = true;
+}
+
+/**
+ * Opens the download-all confirmation modal and loads the total clip count.
+ * @example void openDownloadAllModal();
+ */
+async function openDownloadAllModal() {
+  if (!els.downloadAllModal) return;
+
+  const requestId = ++downloadAllCountRequestId;
+  const loadedCount = state.clips.length;
+
+  updateDownloadAllModal({
+    message: tf('download_all_message_more', { 1: loadedCount }),
+    totalCount: null,
+    busy: false,
+  });
+
+  if (els.downloadAllModalTitle) {
+    els.downloadAllModalTitle.textContent = t('download_all_title');
+  }
+  if (els.downloadAllModalCancelBtn) {
+    els.downloadAllModalCancelBtn.textContent = t('cancel');
+  }
+
+  els.downloadAllModal.hidden = false;
+  els.downloadAllModalLoadBtn?.focus();
+
+  updateDownloadAllModal({
+    message: t('download_all_counting'),
+    totalCount: null,
+    busy: false,
+  });
+
+  try {
+    const total = await fetchClipCount();
+    if (requestId !== downloadAllCountRequestId) return;
+
+    const message =
+      total.complete && total.count > loadedCount
+        ? tf('download_all_message_total', {
+            1: loadedCount,
+            2: total.count,
+          })
+        : total.complete
+          ? tf('download_all_message_more', { 1: loadedCount })
+          : tf('download_all_message_total_incomplete', {
+              1: loadedCount,
+              2: total.count,
+            });
+
+    updateDownloadAllModal({
+      message,
+      totalCount: total.count,
+      busy: false,
+    });
+  } catch {
+    if (requestId !== downloadAllCountRequestId) return;
+    updateDownloadAllModal({
+      message: tf('download_all_message_more', { 1: loadedCount }),
+      totalCount: null,
+      busy: false,
+    });
+  }
+}
+
+/**
+ * Handles the clips "Download all" action with optional full-list prefetch.
+ * @example void handleClipsDownloadAll();
+ */
+async function handleClipsDownloadAll() {
+  if (state.clips.length === 0) return;
+
+  if (!state.clipsCursor) {
+    await downloadAll(sortClips(state.clips));
+    return;
+  }
+
+  await openDownloadAllModal();
+}
+
+/**
+ * Downloads only the clips currently loaded in the list.
+ * @example await downloadLoadedClipsOnly();
+ */
+async function downloadLoadedClipsOnly() {
+  closeDownloadAllModal();
+  await downloadAll(sortClips(state.clips));
+}
+
+/**
+ * Loads every matching clip, then queues downloads for all of them.
+ * @example await downloadAllClipsAfterLoad();
+ */
+async function downloadAllClipsAfterLoad() {
+  if (!els.downloadAllModal) return;
+
+  updateDownloadAllModal({
+    message: tf('download_all_loading', { 1: state.clips.length }),
+    busy: true,
+  });
+
+  const loaded = await loadAllClips();
+  if (!loaded) {
+    closeDownloadAllModal();
+    return;
+  }
+
+  closeDownloadAllModal();
+  await downloadAll(sortClips(state.clips));
 }
 
 /**
@@ -1520,9 +1804,22 @@ function bindEvents() {
 
   els.mediaModalClose?.addEventListener('click', closeMediaModal);
   els.mediaModalBackdrop?.addEventListener('click', closeMediaModal);
+  els.downloadAllModalCancelBtn?.addEventListener('click', closeDownloadAllModal);
+  els.downloadAllModalBackdrop?.addEventListener('click', closeDownloadAllModal);
+  els.downloadAllModalShownBtn?.addEventListener('click', () => {
+    void downloadLoadedClipsOnly();
+  });
+  els.downloadAllModalLoadBtn?.addEventListener('click', () => {
+    void downloadAllClipsAfterLoad();
+  });
   document.addEventListener('keydown', event => {
-    if (event.key === 'Escape' && els.mediaModal && !els.mediaModal.hidden) {
+    if (event.key !== 'Escape') return;
+    if (els.mediaModal && !els.mediaModal.hidden) {
       closeMediaModal();
+      return;
+    }
+    if (els.downloadAllModal && !els.downloadAllModal.hidden) {
+      closeDownloadAllModal();
     }
   });
   if (els.mediaModalClose) {
@@ -1534,7 +1831,7 @@ function bindEvents() {
   });
 
   els.clipsDownloadAll?.addEventListener('click', () => {
-    void downloadAll(state.clips);
+    void handleClipsDownloadAll();
   });
 
   els.videosDownloadAll?.addEventListener('click', () => {

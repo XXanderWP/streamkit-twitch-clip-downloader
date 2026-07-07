@@ -97,6 +97,7 @@ const DOWNLOAD_INDEX_FILE = '.twitch-downloader-index.json';
 const CLIPS_PAGE_SIZE = 20;
 const CLIPS_FETCH_SIZE = 100;
 const CLIPS_MAX_SCAN_PAGES = 10;
+const CLIPS_COUNT_MAX_SCAN_PAGES = 200;
 
 /**
  * Reads persisted addon settings from the main process.
@@ -626,6 +627,52 @@ async function fetchFilteredClips(
 }
 
 /**
+ * Counts clips that match the active filters by scanning Twitch pagination.
+ * @param broadcasterId Twitch broadcaster id.
+ * @param filters Clip filters from the UI.
+ * @returns Matching clip count and whether the scan finished.
+ * @example
+ * const total = await countFilteredClips('123', filters);
+ */
+async function countFilteredClips(
+  broadcasterId: string,
+  filters: ClipFilters
+) {
+  let count = 0;
+  let nextCursor: string | null = null;
+  let scannedPages = 0;
+
+  while (scannedPages < CLIPS_COUNT_MAX_SCAN_PAGES) {
+    const params = new URLSearchParams({
+      broadcaster_id: broadcasterId,
+      first: String(CLIPS_FETCH_SIZE),
+    });
+    if (nextCursor) params.set('after', nextCursor);
+    const { startedAt, endedAt } = resolveClipApiDateRange(filters);
+    if (startedAt) params.set('started_at', startedAt);
+    if (endedAt) params.set('ended_at', endedAt);
+
+    const response = await twitchApiGet<HelixListResponse<TwitchClip>>(
+      `https://api.twitch.tv/helix/clips?${params.toString()}`
+    );
+    const batch = response.data ?? [];
+    nextCursor = response.pagination?.cursor ?? null;
+
+    for (const clip of batch) {
+      if (!matchesClipFilters(clip, filters)) continue;
+      count += 1;
+    }
+
+    if (!nextCursor || batch.length === 0) {
+      return { count, complete: true };
+    }
+    scannedPages += 1;
+  }
+
+  return { count, complete: false };
+}
+
+/**
  * Runs yt-dlp download in the background and updates the in-memory job state.
  * @param downloadId Correlation id shared with the UI.
  * @param url Source media URL.
@@ -778,6 +825,7 @@ void (async () => {
 
   network.endpoints.create('state', 'GET', 'onGetState');
   network.endpoints.create('clips', 'GET', 'onGetClips');
+  network.endpoints.create('clips-count', 'GET', 'onGetClipsCount');
   network.endpoints.create('videos', 'GET', 'onGetVideos');
   network.endpoints.create('download', 'POST', 'onDownload');
   network.endpoints.create('open-folder', 'POST', 'onOpenFolder');
@@ -869,6 +917,29 @@ void (async () => {
       return {
         ok: false,
         error: error instanceof Error ? error.message : 'Failed to load clips',
+      };
+    }
+  });
+
+  events.On('onGetClipsCount', async ({ query }) => {
+    const denied = assertToken(query);
+    if (denied) return denied;
+
+    try {
+      const login = typeof query.login === 'string' ? query.login.trim() : '';
+      const filters = parseClipFilters(query);
+      const { broadcasterId } = await resolveBroadcaster(login || undefined);
+      const total = await countFilteredClips(broadcasterId, filters);
+
+      return {
+        ok: true,
+        count: total.count,
+        complete: total.complete,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : 'Failed to count clips',
       };
     }
   });

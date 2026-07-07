@@ -13,6 +13,7 @@ Download public Twitch clips and stream recordings (VODs) through the bundled yt
 - Browse and download public VODs (archived broadcasts)
 - Preview clips and VODs in an embedded Twitch player (click thumbnail or title)
 - Sort loaded clips by date or view count (ascending / descending)
+- "Download all" asks whether to fetch every matching clip or only the loaded page
 - Download by direct Twitch clip / VOD URL
 - Configurable download folder and yt-dlp filename template in addon settings
 - Download progress in the application window and completion notifications

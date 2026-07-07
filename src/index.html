@@ -138,6 +138,26 @@
       </div>
     </div>
 
+    <div class="confirm-modal" id="download-all-modal" hidden>
+      <div class="confirm-modal__backdrop" id="download-all-modal-backdrop"></div>
+      <div
+        class="confirm-modal__dialog"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="download-all-modal-title"
+      >
+        <h2 class="confirm-modal__title" id="download-all-modal-title" data-i18n="download_all_title">
+          Download all clips
+        </h2>
+        <p class="confirm-modal__message" id="download-all-modal-message"></p>
+        <div class="confirm-modal__actions">
+          <button type="button" class="btn btn-primary" id="download-all-modal-load"></button>
+          <button type="button" class="btn" id="download-all-modal-shown"></button>
+          <button type="button" class="btn" id="download-all-modal-cancel" data-i18n="cancel">Cancel</button>
+        </div>
+      </div>
+    </div>
+
     <script src="app.js"></script>
   </body>
 </html>
