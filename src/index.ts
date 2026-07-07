@@ -63,7 +63,10 @@ type WorkerDownloadJob = {
 };
 
 /** Local index of completed downloads stored in the output folder. */
-type DownloadIndex = Record<string, { url: string; title: string; downloadedAt: number }>;
+type DownloadIndex = Record<
+  string,
+  { url: string; title: string; downloadedAt: number }
+>;
 
 /** Client-side clip filters (Twitch API + local matching). */
 type ClipFilters = {
@@ -184,7 +187,9 @@ async function getAuthTwitchChannel() {
 async function resolveBroadcaster(login?: string) {
   if (login) {
     const normalizedLogin = login.trim().toLowerCase();
-    const users = await twitchApiGet<HelixListResponse<{ id: string; display_name: string; login: string }>>(
+    const users = await twitchApiGet<
+      HelixListResponse<{ id: string; display_name: string; login: string }>
+    >(
       `https://api.twitch.tv/helix/users?login=${encodeURIComponent(normalizedLogin)}`
     );
     const user = users.data?.[0];
@@ -206,7 +211,9 @@ async function resolveBroadcaster(login?: string) {
  * const output = buildOutputPath('C:\\\\Videos');
  */
 function buildOutputPath(folder: string, filenameTemplate: string) {
-  const template = String(filenameTemplate || '%(title)s.%(ext)s').trim() || '%(title)s.%(ext)s';
+  const template =
+    String(filenameTemplate || '%(title)s.%(ext)s').trim() ||
+    '%(title)s.%(ext)s';
   const separator = folder.includes('\\') ? '\\' : '/';
   return `${folder}${separator}${template}`;
 }
@@ -219,7 +226,10 @@ function buildOutputPath(folder: string, filenameTemplate: string) {
  * await ensureDownloadFolderAccess('C:\\\\Videos');
  */
 async function ensureDownloadFolderAccess(folder: string) {
-  return files.requestAccess(folder, 'manage') as Promise<{ success: boolean; message?: string }>;
+  return files.requestAccess(folder, 'manage') as Promise<{
+    success: boolean;
+    message?: string;
+  }>;
 }
 
 /**
@@ -253,7 +263,10 @@ function getDownloadIndexPath(folder: string) {
  */
 async function loadDownloadIndex(folder: string): Promise<DownloadIndex> {
   const indexPath = getDownloadIndexPath(folder);
-  const result = (await files.readFile(indexPath)) as { success?: boolean; data?: string };
+  const result = (await files.readFile(indexPath)) as {
+    success?: boolean;
+    data?: string;
+  };
   if (!result?.success || !result.data) {
     return {};
   }
@@ -273,11 +286,19 @@ async function loadDownloadIndex(folder: string): Promise<DownloadIndex> {
  * @example
  * await markMediaDownloaded('C:\\\\Videos', 'abc', 'https://clips.twitch.tv/abc', 'Clip');
  */
-async function markMediaDownloaded(folder: string, mediaId: string, url: string, title: string) {
+async function markMediaDownloaded(
+  folder: string,
+  mediaId: string,
+  url: string,
+  title: string
+) {
   if (!mediaId) return;
   const index = await loadDownloadIndex(folder);
   index[mediaId] = { url, title, downloadedAt: Date.now() };
-  await files.writeFile(getDownloadIndexPath(folder), JSON.stringify(index, null, 2));
+  await files.writeFile(
+    getDownloadIndexPath(folder),
+    JSON.stringify(index, null, 2)
+  );
 }
 
 /**
@@ -295,7 +316,9 @@ async function listDownloadFolderNames(folder: string) {
   if (!result?.success || !Array.isArray(result.entries)) {
     return [] as string[];
   }
-  return result.entries.filter(entry => entry.isFile).map(entry => entry.name.toLowerCase());
+  return result.entries
+    .filter(entry => entry.isFile)
+    .map(entry => entry.name.toLowerCase());
 }
 
 /**
@@ -320,7 +343,9 @@ function isMediaDownloaded(
   if (index[mediaId]) return true;
   const slug = url.split('/').pop()?.toLowerCase() ?? '';
   const idLower = mediaId.toLowerCase();
-  return fileNames.some(name => name.includes(idLower) || (slug && name.includes(slug)));
+  return fileNames.some(
+    name => name.includes(idLower) || (slug && name.includes(slug))
+  );
 }
 
 /**
@@ -331,7 +356,10 @@ function isMediaDownloaded(
  * @example
  * const clips = await annotateDownloaded(folder, rawClips);
  */
-async function annotateDownloaded<T extends { id: string; url: string }>(folder: string, items: T[]) {
+async function annotateDownloaded<T extends { id: string; url: string }>(
+  folder: string,
+  items: T[]
+) {
   if (!folder) {
     return items.map(item => ({ ...item, downloaded: false }));
   }
@@ -357,7 +385,9 @@ type TwitchHelixUser = {
  * const enriched = await enrichClipsWithCreatorProfiles(clips);
  */
 async function enrichClipsWithCreatorProfiles(clips: TwitchClip[]) {
-  const creatorIds = [...new Set(clips.map(clip => clip.creator_id).filter(Boolean))];
+  const creatorIds = [
+    ...new Set(clips.map(clip => clip.creator_id).filter(Boolean)),
+  ];
   if (creatorIds.length === 0) return clips;
 
   const profileById = new Map<string, string>();
@@ -431,7 +461,14 @@ function toRfc3339Date(value: string, endOfDay = false) {
  */
 function parseCreatorList(value: unknown) {
   if (typeof value !== 'string') return [] as string[];
-  return [...new Set(value.split(',').map(item => item.trim().toLowerCase()).filter(Boolean))];
+  return [
+    ...new Set(
+      value
+        .split(',')
+        .map(item => item.trim().toLowerCase())
+        .filter(Boolean)
+    ),
+  ];
 }
 
 /**
@@ -442,10 +479,14 @@ function parseCreatorList(value: unknown) {
  * const filters = parseClipFilters(query);
  */
 function parseClipFilters(query: Record<string, unknown>): ClipFilters {
-  const minViewsRaw = typeof query.min_views === 'string' ? Number(query.min_views) : NaN;
-  const maxViewsRaw = typeof query.max_views === 'string' ? Number(query.max_views) : NaN;
-  const dateFrom = typeof query.started_at === 'string' ? query.started_at.trim() : '';
-  const dateTo = typeof query.ended_at === 'string' ? query.ended_at.trim() : '';
+  const minViewsRaw =
+    typeof query.min_views === 'string' ? Number(query.min_views) : NaN;
+  const maxViewsRaw =
+    typeof query.max_views === 'string' ? Number(query.max_views) : NaN;
+  const dateFrom =
+    typeof query.started_at === 'string' ? query.started_at.trim() : '';
+  const dateTo =
+    typeof query.ended_at === 'string' ? query.ended_at.trim() : '';
   return {
     title: typeof query.title === 'string' ? query.title.trim() : '',
     dateFrom: dateFrom || undefined,
@@ -502,7 +543,10 @@ function matchesClipFilters(clip: TwitchClip, filters: ClipFilters) {
   if (filters.dateTo && clipDate > filters.dateTo) {
     return false;
   }
-  if (filters.title && !clip.title.toLowerCase().includes(filters.title.toLowerCase())) {
+  if (
+    filters.title &&
+    !clip.title.toLowerCase().includes(filters.title.toLowerCase())
+  ) {
     return false;
   }
   if (filters.minViews !== undefined && clip.view_count < filters.minViews) {
@@ -518,7 +562,11 @@ function matchesClipFilters(clip: TwitchClip, filters: ClipFilters) {
     );
     if (!included) return false;
   }
-  if (filters.excludeCreators.some(name => creator === name || creator.includes(name))) {
+  if (
+    filters.excludeCreators.some(
+      name => creator === name || creator.includes(name)
+    )
+  ) {
     return false;
   }
   return true;
@@ -533,12 +581,19 @@ function matchesClipFilters(clip: TwitchClip, filters: ClipFilters) {
  * @example
  * const page = await fetchFilteredClips('123', filters, null);
  */
-async function fetchFilteredClips(broadcasterId: string, filters: ClipFilters, cursor: string | null) {
+async function fetchFilteredClips(
+  broadcasterId: string,
+  filters: ClipFilters,
+  cursor: string | null
+) {
   const collected: TwitchClip[] = [];
   let nextCursor = cursor;
   let scannedPages = 0;
 
-  while (collected.length < CLIPS_PAGE_SIZE && scannedPages < CLIPS_MAX_SCAN_PAGES) {
+  while (
+    collected.length < CLIPS_PAGE_SIZE &&
+    scannedPages < CLIPS_MAX_SCAN_PAGES
+  ) {
     const params = new URLSearchParams({
       broadcaster_id: broadcasterId,
       first: String(CLIPS_FETCH_SIZE),
@@ -595,7 +650,10 @@ async function runMediaDownload(
   job.progress = { stage: 'starting', percent: 0 };
 
   const outputPath = buildOutputPath(folder, filenameTemplate);
-  const result = await ytdlp.downloadFile(url, outputPath, { downloadId, concurrentFragments: 4 });
+  const result = await ytdlp.downloadFile(url, outputPath, {
+    downloadId,
+    concurrentFragments: 4,
+  });
 
   if (!result.success) {
     job.status = 'error';
@@ -619,16 +677,26 @@ async function runMediaDownload(
  * @example
  * const result = await startMediaDownload('https://clips.twitch.tv/Example', 'My clip', 'ClipId');
  */
-async function startMediaDownload(url: string, title: string, mediaId?: string) {
+async function startMediaDownload(
+  url: string,
+  title: string,
+  mediaId?: string
+) {
   const params = await readAddonParams();
   const folder = String(params.download_folder ?? '').trim();
   if (!folder) {
-    return { error: 'no_folder', message: 'Set a download folder in addon settings' };
+    return {
+      error: 'no_folder',
+      message: 'Set a download folder in addon settings',
+    };
   }
 
   const access = await ensureDownloadFolderAccess(folder);
   if (!access.success) {
-    return { error: 'no_file_access', message: access.message ?? 'Folder access denied' };
+    return {
+      error: 'no_file_access',
+      message: access.message ?? 'Folder access denied',
+    };
   }
 
   const downloadId = random.id();
@@ -642,263 +710,293 @@ async function startMediaDownload(url: string, title: string, mediaId?: string) 
   };
   downloadJobs.set(downloadId, job);
 
-  const filenameTemplate = String(params.filename_template ?? '%(title)s.%(ext)s');
-  void runMediaDownload(downloadId, url, title, folder, filenameTemplate, mediaId);
+  const filenameTemplate = String(
+    params.filename_template ?? '%(title)s.%(ext)s'
+  );
+  void runMediaDownload(
+    downloadId,
+    url,
+    title,
+    folder,
+    filenameTemplate,
+    mediaId
+  );
 
   return { downloadId, started: true };
 }
 
 void (async () => {
   await GenerateConfig([
-  {
-    key: 'download_folder',
-    type: 'folder',
-    default: '',
-    pathPicker: {
-      title: {
-        en: 'Download folder',
-        ru: 'Папка загрузки',
-        uk: 'Папка завантаження',
+    {
+      key: 'download_folder',
+      type: 'folder',
+      default: '',
+      pathPicker: {
+        title: {
+          en: 'Download folder',
+          ru: 'Папка загрузки',
+          uk: 'Папка завантаження',
+        },
+      },
+      editor: {
+        label: {
+          en: 'Download folder',
+          ru: 'Папка загрузки',
+          uk: 'Папка завантаження',
+        },
+        required: true,
+        description: {
+          en: 'Folder where clips and VODs will be saved',
+          ru: 'Папка, куда будут сохраняться клипы и записи',
+          uk: 'Папка, куди зберігатимуться кліпи та записи',
+        },
       },
     },
-    editor: {
-      label: {
-        en: 'Download folder',
-        ru: 'Папка загрузки',
-        uk: 'Папка завантаження',
-      },
-      required: true,
-      description: {
-        en: 'Folder where clips and VODs will be saved',
-        ru: 'Папка, куда будут сохраняться клипы и записи',
-        uk: 'Папка, куди зберігатимуться кліпи та записи',
-      },
-    },
-  },
-  {
-    key: 'filename_template',
-    type: 'text',
-    default: '%(title)s.%(ext)s',
-    editor: {
-      label: {
-        en: 'Filename template',
-        ru: 'Шаблон имени файла',
-        uk: 'Шаблон імені файлу',
-      },
-      description: {
-        en: 'yt-dlp output template, e.g. %(uploader)s - %(title)s.%(ext)s',
-        ru: 'Шаблон yt-dlp, например %(uploader)s - %(title)s.%(ext)s',
-        uk: 'Шаблон yt-dlp, наприклад %(uploader)s - %(title)s.%(ext)s',
+    {
+      key: 'filename_template',
+      type: 'text',
+      default: '%(title)s.%(ext)s',
+      editor: {
+        label: {
+          en: 'Filename template',
+          ru: 'Шаблон имени файла',
+          uk: 'Шаблон імені файлу',
+        },
+        description: {
+          en: 'yt-dlp output template, e.g. %(uploader)s - %(title)s.%(ext)s',
+          ru: 'Шаблон yt-dlp, например %(uploader)s - %(title)s.%(ext)s',
+          uk: 'Шаблон yt-dlp, наприклад %(uploader)s - %(title)s.%(ext)s',
+        },
       },
     },
-  },
-]);
+  ]);
 
-const initialParams = await readAddonParams();
-if (initialParams.download_folder?.trim()) {
-  await ensureDownloadFolderAccess(initialParams.download_folder.trim());
-}
-
-network.endpoints.create('state', 'GET', 'onGetState');
-network.endpoints.create('clips', 'GET', 'onGetClips');
-network.endpoints.create('videos', 'GET', 'onGetVideos');
-network.endpoints.create('download', 'POST', 'onDownload');
-network.endpoints.create('open-folder', 'POST', 'onOpenFolder');
-network.endpoints.create('open-url', 'POST', 'onOpenUrl');
-
-events.On('ytdlp:download-progress', ({ downloadId, progress }) => {
-  const job = downloadJobs.get(downloadId);
-  if (!job) return;
-  job.status = 'downloading';
-  job.progress = {
-    stage: progress.stage,
-    percent: progress.percent,
-    speed: progress.speed,
-    eta: progress.eta,
-  };
-});
-
-events.On('onGetState', async ({ query }) => {
-  const denied = assertToken(query);
-  if (denied) return denied;
-
-  const params = await readAddonParams();
-  const folder = String(params.download_folder ?? '').trim();
-  if (folder) {
-    await ensureDownloadFolderAccess(folder);
+  const initialParams = await readAddonParams();
+  if (initialParams.download_folder?.trim()) {
+    await ensureDownloadFolderAccess(initialParams.download_folder.trim());
   }
 
-  let twitchLogin = '';
-  let twitchDisplayName = '';
-  try {
-    const auth = await getAuthTwitchChannel();
-    twitchLogin = auth.login;
-    twitchDisplayName = auth.displayName;
-  } catch {
-    twitchLogin = '';
-    twitchDisplayName = '';
-  }
+  network.endpoints.create('state', 'GET', 'onGetState');
+  network.endpoints.create('clips', 'GET', 'onGetClips');
+  network.endpoints.create('videos', 'GET', 'onGetVideos');
+  network.endpoints.create('download', 'POST', 'onDownload');
+  network.endpoints.create('open-folder', 'POST', 'onOpenFolder');
+  network.endpoints.create('open-url', 'POST', 'onOpenUrl');
 
-  return {
-    ok: true,
-    downloadFolder: folder,
-    filenameTemplate: String(params.filename_template ?? '%(title)s.%(ext)s'),
-    downloads: [...downloadJobs.values()].slice(-20).reverse(),
-    twitchLogin,
-    twitchDisplayName,
-    language: LANG.current,
-  };
-});
+  events.On('ytdlp:download-progress', ({ downloadId, progress }) => {
+    const job = downloadJobs.get(downloadId);
+    if (!job) return;
+    job.status = 'downloading';
+    job.progress = {
+      stage: progress.stage,
+      percent: progress.percent,
+      speed: progress.speed,
+      eta: progress.eta,
+    };
+  });
 
-events.On('onGetClips', async ({ query }) => {
-  const denied = assertToken(query);
-  if (denied) return denied;
+  events.On('onGetState', async ({ query }) => {
+    const denied = assertToken(query);
+    if (denied) return denied;
 
-  try {
-    const login = typeof query.login === 'string' ? query.login.trim() : '';
-    const cursor = typeof query.cursor === 'string' ? query.cursor.trim() : '';
-    const filters = parseClipFilters(query);
-    const { broadcasterId, displayName } = await resolveBroadcaster(login || undefined);
-    const addonParams = await readAddonParams();
-    const folder = String(addonParams.download_folder ?? '').trim();
-    const page = await fetchFilteredClips(broadcasterId, filters, cursor || null);
-    const enrichedClips = await enrichClipsWithCreatorProfiles(page.clips);
-    const clips = await annotateDownloaded(folder, enrichedClips);
+    const params = await readAddonParams();
+    const folder = String(params.download_folder ?? '').trim();
+    if (folder) {
+      await ensureDownloadFolderAccess(folder);
+    }
+
+    let twitchLogin = '';
+    let twitchDisplayName = '';
+    try {
+      const auth = await getAuthTwitchChannel();
+      twitchLogin = auth.login;
+      twitchDisplayName = auth.displayName;
+    } catch {
+      twitchLogin = '';
+      twitchDisplayName = '';
+    }
 
     return {
       ok: true,
-      channel: displayName,
-      clips,
-      cursor: page.cursor,
-      filters: {
-        apiDateRange: Boolean(filters.dateFrom || filters.dateTo),
-        localFilters: Boolean(
-          filters.title ||
+      downloadFolder: folder,
+      filenameTemplate: String(params.filename_template ?? '%(title)s.%(ext)s'),
+      downloads: [...downloadJobs.values()].slice(-20).reverse(),
+      twitchLogin,
+      twitchDisplayName,
+      language: LANG.current,
+    };
+  });
+
+  events.On('onGetClips', async ({ query }) => {
+    const denied = assertToken(query);
+    if (denied) return denied;
+
+    try {
+      const login = typeof query.login === 'string' ? query.login.trim() : '';
+      const cursor =
+        typeof query.cursor === 'string' ? query.cursor.trim() : '';
+      const filters = parseClipFilters(query);
+      const { broadcasterId, displayName } = await resolveBroadcaster(
+        login || undefined
+      );
+      const addonParams = await readAddonParams();
+      const folder = String(addonParams.download_folder ?? '').trim();
+      const page = await fetchFilteredClips(
+        broadcasterId,
+        filters,
+        cursor || null
+      );
+      const enrichedClips = await enrichClipsWithCreatorProfiles(page.clips);
+      const clips = await annotateDownloaded(folder, enrichedClips);
+
+      return {
+        ok: true,
+        channel: displayName,
+        clips,
+        cursor: page.cursor,
+        filters: {
+          apiDateRange: Boolean(filters.dateFrom || filters.dateTo),
+          localFilters: Boolean(
+            filters.title ||
             filters.minViews !== undefined ||
             filters.maxViews !== undefined ||
             filters.includeCreators.length ||
             filters.excludeCreators.length
-        ),
-      },
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      error: error instanceof Error ? error.message : 'Failed to load clips',
-    };
+          ),
+        },
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : 'Failed to load clips',
+      };
+    }
+  });
+
+  events.On('onGetVideos', async ({ query }) => {
+    const denied = assertToken(query);
+    if (denied) return denied;
+
+    try {
+      const login = typeof query.login === 'string' ? query.login.trim() : '';
+      const cursor =
+        typeof query.cursor === 'string' ? query.cursor.trim() : '';
+      const { broadcasterId, displayName } = await resolveBroadcaster(
+        login || undefined
+      );
+      const addonParams = await readAddonParams();
+      const folder = String(addonParams.download_folder ?? '').trim();
+      const params = new URLSearchParams({
+        user_id: broadcasterId,
+        first: '20',
+        type: 'archive',
+      });
+      if (cursor) params.set('after', cursor);
+
+      const videos = await twitchApiGet<HelixListResponse<TwitchVideo>>(
+        `https://api.twitch.tv/helix/videos?${params.toString()}`
+      );
+
+      const publicVideos = (videos.data ?? [])
+        .filter(item => item.viewable === 'public')
+        .map(item => ({
+          ...item,
+          thumbnail_url: normalizeThumbnailUrl(item.thumbnail_url),
+        }));
+      const annotatedVideos = await annotateDownloaded(folder, publicVideos);
+
+      return {
+        ok: true,
+        channel: displayName,
+        videos: annotatedVideos,
+        cursor: videos.pagination?.cursor ?? null,
+      };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : 'Failed to load videos',
+      };
+    }
+  });
+
+  /**
+   * Validates external URLs that may be opened in the system browser.
+   * @param value Candidate URL from the web UI.
+   * @returns True when the URL is a Twitch HTTPS link.
+   * @example
+   * isAllowedExternalUrl('https://www.twitch.tv/shroud');
+   */
+  function isAllowedExternalUrl(value: string) {
+    try {
+      const parsed = new URL(value);
+      return (
+        parsed.protocol === 'https:' && parsed.hostname.endsWith('twitch.tv')
+      );
+    } catch {
+      return false;
+    }
   }
-});
 
-events.On('onGetVideos', async ({ query }) => {
-  const denied = assertToken(query);
-  if (denied) return denied;
+  events.On('onOpenUrl', async ({ query, body }) => {
+    const denied = assertToken(query);
+    if (denied) return denied;
 
-  try {
-    const login = typeof query.login === 'string' ? query.login.trim() : '';
-    const cursor = typeof query.cursor === 'string' ? query.cursor.trim() : '';
-    const { broadcasterId, displayName } = await resolveBroadcaster(login || undefined);
+    const url = typeof body?.url === 'string' ? body.url.trim() : '';
+    if (!url || !isAllowedExternalUrl(url)) {
+      return {
+        error: 'invalid_url',
+        message: 'Only Twitch HTTPS URLs are allowed',
+      };
+    }
+
+    api.openUrl(url);
+    return { ok: true };
+  });
+
+  events.On('onOpenFolder', async ({ query }) => {
+    const denied = assertToken(query);
+    if (denied) return denied;
+
     const addonParams = await readAddonParams();
     const folder = String(addonParams.download_folder ?? '').trim();
-    const params = new URLSearchParams({
-      user_id: broadcasterId,
-      first: '20',
-      type: 'archive',
-    });
-    if (cursor) params.set('after', cursor);
+    if (!folder) {
+      return {
+        error: 'no_folder',
+        message: 'Set a download folder in addon settings',
+      };
+    }
 
-    const videos = await twitchApiGet<HelixListResponse<TwitchVideo>>(
-      `https://api.twitch.tv/helix/videos?${params.toString()}`
-    );
+    const access = await ensureDownloadFolderAccess(folder);
+    if (!access.success) {
+      return {
+        error: 'no_file_access',
+        message: access.message ?? 'Folder access denied',
+      };
+    }
 
-    const publicVideos = (videos.data ?? [])
-      .filter(item => item.viewable === 'public')
-      .map(item => ({
-        ...item,
-        thumbnail_url: normalizeThumbnailUrl(item.thumbnail_url),
-      }));
-    const annotatedVideos = await annotateDownloaded(folder, publicVideos);
+    api.openUrl(toFileUrl(folder));
+    return { ok: true };
+  });
 
-    return {
-      ok: true,
-      channel: displayName,
-      videos: annotatedVideos,
-      cursor: videos.pagination?.cursor ?? null,
-    };
-  } catch (error) {
-    return {
-      ok: false,
-      error: error instanceof Error ? error.message : 'Failed to load videos',
-    };
-  }
-});
+  events.On('onDownload', async ({ query, body }) => {
+    const denied = assertToken(query);
+    if (denied) return denied;
 
-/**
- * Validates external URLs that may be opened in the system browser.
- * @param value Candidate URL from the web UI.
- * @returns True when the URL is a Twitch HTTPS link.
- * @example
- * isAllowedExternalUrl('https://www.twitch.tv/shroud');
- */
-function isAllowedExternalUrl(value: string) {
-  try {
-    const parsed = new URL(value);
-    return parsed.protocol === 'https:' && parsed.hostname.endsWith('twitch.tv');
-  } catch {
-    return false;
-  }
-}
+    const url = typeof body?.url === 'string' ? body.url.trim() : '';
+    const title = typeof body?.title === 'string' ? body.title.trim() : url;
+    const mediaId =
+      typeof body?.mediaId === 'string' ? body.mediaId.trim() : '';
+    if (!url) {
+      return { error: 'missing_url', message: 'URL is required' };
+    }
 
-events.On('onOpenUrl', async ({ query, body }) => {
-  const denied = assertToken(query);
-  if (denied) return denied;
-
-  const url = typeof body?.url === 'string' ? body.url.trim() : '';
-  if (!url || !isAllowedExternalUrl(url)) {
-    return { error: 'invalid_url', message: 'Only Twitch HTTPS URLs are allowed' };
-  }
-
-  api.openUrl(url);
-  return { ok: true };
-});
-
-events.On('onOpenFolder', async ({ query }) => {
-  const denied = assertToken(query);
-  if (denied) return denied;
-
-  const addonParams = await readAddonParams();
-  const folder = String(addonParams.download_folder ?? '').trim();
-  if (!folder) {
-    return { error: 'no_folder', message: 'Set a download folder in addon settings' };
-  }
-
-  const access = await ensureDownloadFolderAccess(folder);
-  if (!access.success) {
-    return { error: 'no_file_access', message: access.message ?? 'Folder access denied' };
-  }
-
-  api.openUrl(toFileUrl(folder));
-  return { ok: true };
-});
-
-events.On('onDownload', async ({ query, body }) => {
-  const denied = assertToken(query);
-  if (denied) return denied;
-
-  const url = typeof body?.url === 'string' ? body.url.trim() : '';
-  const title = typeof body?.title === 'string' ? body.title.trim() : url;
-  const mediaId = typeof body?.mediaId === 'string' ? body.mediaId.trim() : '';
-  if (!url) {
-    return { error: 'missing_url', message: 'URL is required' };
-  }
-
-  try {
-    return await startMediaDownload(url, title || url, mediaId || undefined);
-  } catch (error) {
-    return {
-      error: 'download_failed',
-      message: error instanceof Error ? error.message : 'Download failed',
-    };
-  }
-});
-
+    try {
+      return await startMediaDownload(url, title || url, mediaId || undefined);
+    } catch (error) {
+      return {
+        error: 'download_failed',
+        message: error instanceof Error ? error.message : 'Download failed',
+      };
+    }
+  });
 })();
