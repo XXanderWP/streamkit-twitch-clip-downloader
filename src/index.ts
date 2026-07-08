@@ -156,7 +156,7 @@ function assertToken(query: { token?: string }) {
  * @example
  * const users = await twitchApiGet('https://api.twitch.tv/helix/users?login=shroud');
  */
-async function twitchApiGet<T>(url: string, scopes: string[] = []) {
+async function twitchApiGet<T>(url: string, scopes: string[] = []): Promise<T> {
   const response = await addons.request('twitch', 'apiGet', { url, scopes });
   if (!response.success) {
     throw new Error(response.message ?? 'Twitch API request failed');
@@ -236,11 +236,14 @@ async function resolveBroadcaster(login?: string) {
  * const output = buildOutputPath('C:\\\\Videos');
  */
 function buildOutputPath(folder: string, filenameTemplate: string) {
+  const normalizedFolder = String(folder)
+    .trim()
+    .replace(/[\\/]+$/, '');
   const template =
     String(filenameTemplate || '%(title)s.%(ext)s').trim() ||
     '%(title)s.%(ext)s';
-  const separator = folder.includes('\\') ? '\\' : '/';
-  return `${folder}${separator}${template}`;
+  const separator = normalizedFolder.includes('\\') ? '\\' : '/';
+  return `${normalizedFolder}${separator}${template}`;
 }
 
 /**
@@ -344,6 +347,68 @@ async function listDownloadFolderNames(folder: string) {
   return result.entries
     .filter(entry => entry.isFile)
     .map(entry => entry.name.toLowerCase());
+}
+
+/** File extensions treated as downloaded media when verifying yt-dlp output. */
+const MEDIA_FILE_EXTENSIONS = [
+  '.mp4',
+  '.mkv',
+  '.webm',
+  '.mov',
+  '.flv',
+  '.m4a',
+  '.ts',
+];
+
+/**
+ * Returns true when a folder entry looks like a media file rather than metadata.
+ * @param fileName Lowercase file name from the download folder.
+ * @example
+ * isMediaFileName('my clip.mp4');
+ */
+function isMediaFileName(fileName: string) {
+  const lower = fileName.toLowerCase();
+  if (lower === DOWNLOAD_INDEX_FILE.toLowerCase()) {
+    return false;
+  }
+  return MEDIA_FILE_EXTENSIONS.some(ext => lower.endsWith(ext));
+}
+
+/**
+ * Verifies that yt-dlp produced a media file in the configured download folder.
+ * @param folder Absolute download folder path.
+ * @param beforeFiles Lowercase file names present before the download started.
+ * @param mediaId Twitch clip or VOD id.
+ * @param url Source media URL.
+ * @returns True when a matching media file is present after download.
+ * @example
+ * await verifyMediaDownloaded(folder, beforeFiles, 'ClipId', url);
+ */
+async function verifyMediaDownloaded(
+  folder: string,
+  beforeFiles: Set<string>,
+  mediaId?: string,
+  url?: string
+) {
+  const afterNames = await listDownloadFolderNames(folder);
+  const mediaFiles = afterNames.filter(isMediaFileName);
+  if (!mediaFiles.length) {
+    return false;
+  }
+
+  const newFiles = mediaFiles.filter(name => !beforeFiles.has(name));
+  if (newFiles.length) {
+    return true;
+  }
+
+  const idLower = mediaId?.toLowerCase() ?? '';
+  const slug = url?.split('/').pop()?.toLowerCase() ?? '';
+  return mediaFiles.some(name => {
+    if (idLower && name.includes(idLower)) {
+      return true;
+    }
+    return Boolean(slug && name.includes(slug));
+  });
 }
 
 /**
@@ -638,6 +703,9 @@ function buildClipHelixParams(
   return params;
 }
 
+/** Parsed Twitch Helix clip list response. */
+type TwitchClipListResponse = HelixListResponse<TwitchClip>;
+
 /**
  * Scans Twitch clip pages and returns every clip that matches local filters.
  * @param broadcasterId Twitch broadcaster id.
@@ -655,7 +723,7 @@ async function collectAllFilteredClips(
   let scannedPages = 0;
 
   while (scannedPages < CLIPS_COUNT_MAX_SCAN_PAGES) {
-    const response = await twitchApiGet<HelixListResponse<TwitchClip>>(
+    const response: TwitchClipListResponse = await twitchApiGet(
       `https://api.twitch.tv/helix/clips?${buildClipHelixParams(
         broadcasterId,
         filters,
@@ -806,7 +874,7 @@ async function fetchApiSortedClipsPage(
     collected.length < CLIPS_PAGE_SIZE &&
     scannedPages < CLIPS_MAX_SCAN_PAGES
   ) {
-    const response = await twitchApiGet<HelixListResponse<TwitchClip>>(
+    const response: TwitchClipListResponse = await twitchApiGet(
       `https://api.twitch.tv/helix/clips?${buildClipHelixParams(
         broadcasterId,
         filters,
@@ -892,10 +960,7 @@ async function fetchFilteredClips(
  * @example
  * const total = await countFilteredClips('123', filters);
  */
-async function countFilteredClips(
-  broadcasterId: string,
-  filters: ClipFilters
-) {
+async function countFilteredClips(broadcasterId: string, filters: ClipFilters) {
   const result = await collectAllFilteredClips(broadcasterId, filters);
   return {
     count: result.clips.length,
@@ -927,6 +992,7 @@ async function runMediaDownload(
   job.status = 'downloading';
   job.progress = { stage: 'starting', percent: 0 };
 
+  const beforeFiles = new Set(await listDownloadFolderNames(folder));
   const outputPath = buildOutputPath(folder, filenameTemplate);
   const result = await ytdlp.downloadFile(url, outputPath, {
     downloadId,
@@ -936,6 +1002,19 @@ async function runMediaDownload(
   if (!result.success) {
     job.status = 'error';
     job.error = result.message ?? result.error ?? 'Download failed';
+    return;
+  }
+
+  const verified = await verifyMediaDownloaded(
+    folder,
+    beforeFiles,
+    mediaId,
+    url
+  );
+  if (!verified) {
+    job.status = 'error';
+    job.error =
+      'Video file was not found in the download folder after yt-dlp finished';
     return;
   }
 
